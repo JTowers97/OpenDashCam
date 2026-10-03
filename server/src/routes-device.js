@@ -87,6 +87,21 @@ export function registerDeviceRoutes(router, app) {
     send(ctx.res, 200, { ok: true });
   });
 
+  // ---- Tracking-only mode: batches of points (sent late if the phone was offline). The newest is the live position.
+  router.add('POST', '/api/v1/track', async (ctx) => {
+    const cam = requireCamera(ctx);
+    const b = await readJson(ctx.req);
+    const pts = (Array.isArray(b.points) ? b.points : []).slice(0, 5000)
+      .map((p) => ({ t: num(p.t), lat: num(p.lat), lon: num(p.lon), speed: num(p.speed), course: num(p.course), acc: num(p.acc) }))
+      .filter((p) => p.t && p.lat != null && p.lon != null && Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180)
+      .sort((a, z) => a.t - z.t);
+    if (!pts.length) return send(ctx.res, 200, { ok: true, accepted: 0 });
+    insertPoints(db, cam.car_id, cam.id, pts.slice(0, -1));
+    recordLive(db, cam, pts[pts.length - 1]); // also stores the point
+    db.run(`UPDATE cameras SET mode = 'tracking' WHERE id = ?`, cam.id);
+    send(ctx.res, 200, { ok: true, accepted: pts.length });
+  });
+
   // ---- Events reported by the phone (impact, overheating, ...)
   router.add('POST', '/api/v1/events', async (ctx) => {
     const cam = requireCamera(ctx);
@@ -244,11 +259,13 @@ export function registerDeviceRoutes(router, app) {
   // ---- Clips of this phone's car, for browsing in the app
   router.add('GET', '/api/v1/clips', (ctx) => {
     const cam = requireCamera(ctx);
-    const limit = Math.min(200, Number(ctx.query.get('limit')) || 50);
+    const limit = Math.min(1000, Number(ctx.query.get('limit')) || 50);
     const offset = Number(ctx.query.get('offset')) || 0;
     const rows = db.all(
-      `SELECT c.id, c.file_name, c.started_at, c.duration_ms, c.size, c.locked, c.encrypted, c.mode, c.codec, m.label AS camera
-       FROM clips c JOIN cameras m ON m.id = c.camera_id WHERE c.car_id = ? ORDER BY c.started_at DESC LIMIT ? OFFSET ?`,
+      `SELECT c.id, c.file_name, c.started_at, c.duration_ms, c.size, c.locked, c.encrypted, c.mode, c.codec, c.lat, c.lon, c.place,
+         m.label AS camera
+       FROM clips c JOIN cameras m ON m.id = c.camera_id WHERE c.car_id = ? ${ctx.query.get('located') === '1' ? 'AND c.lat IS NOT NULL' : ''}
+       ORDER BY c.started_at DESC LIMIT ? OFFSET ?`,
       cam.car_id, limit, offset);
     const base = app.publicUrl(ctx.req);
     send(ctx.res, 200, {
@@ -257,6 +274,7 @@ export function registerDeviceRoutes(router, app) {
         return {
           id: r.id, fileName: r.file_name, startedAt: r.started_at, durationMs: r.duration_ms, size: r.size,
           locked: !!r.locked, encrypted: !!r.encrypted, mode: r.mode, codec: r.codec, camera: r.camera,
+          lat: r.lat, lon: r.lon, place: r.place,
           streamUrl: `${base}/api/clips/${r.id}/stream?st=${st}`,
           h264Url: `${base}/api/clips/${r.id}/stream?codec=h264&st=${st}`,
           thumbUrl: `${base}/api/clips/${r.id}/thumb?st=${st}`,

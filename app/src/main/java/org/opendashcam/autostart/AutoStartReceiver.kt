@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import org.opendashcam.settings.OdcSettings
+import org.opendashcam.tracking.TrackingService
 
 /**
  * Manifest receiver for broadcasts Android still delivers to closed apps:
@@ -30,6 +31,8 @@ class AutoStartReceiver : BroadcastReceiver() {
             }
             Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED -> {
                 if (settings.autoStartCharging) StandbyService.start(context)
+                // Tracking-only mode resumes by itself only with "Allow all the time" location access.
+                if (settings.trackingAfterRestart && TrackingService.hasBackgroundPermission(context)) TrackingService.start(context)
             }
         }
     }

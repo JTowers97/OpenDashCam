@@ -309,7 +309,7 @@ fun SettingsScreen(
         )
         val zoneCount = settings.privacyZones.size
         OutlinedButton(onClick = onOpenPrivacyZones, modifier = Modifier.padding(vertical = 6.dp)) {
-            Text(if (zoneCount == 0) "Privacy zones" else "Privacy zones ($zoneCount)")
+            Text(if (zoneCount == 0) "Privacy zones (map)" else "Privacy zones on the map ($zoneCount)")
         }
         Hint("No location is logged inside a privacy zone, and parking mode can be switched off there.")
 

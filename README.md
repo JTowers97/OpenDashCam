@@ -35,7 +35,10 @@ Free and open source. No accounts, no cloud, no ads, no tracking.
 - Optional **GPS and speed logging** saved with each clip (GPX), using the phone's own location service
   (no Google Play Services needed)
 - Optional subtitle file with date, time and speed that most video players show over the clip
-- **Privacy zones** where no location is logged and parking mode can be switched off (e.g. at home)
+- **Privacy zones**, drawn on a map, where no location is logged and parking mode can be switched off
+  (e.g. at home)
+- **Tracking-only mode** (with an ODC Server): reports the car's position and speed in the background
+  without recording; positions are kept on the phone and sent later when there's no connection
 - mph or km/h, detected from your region
 
 ### Auto-start
@@ -53,6 +56,7 @@ Free and open source. No accounts, no cloud, no ads, no tracking.
 ### ODC Server (optional, self-hosted)
 - Timeline of all footage with thumbnails, sorting and filters, playable in any browser
 - Live map of each car, route history and automatically detected trips with place names
+- **Map View** of your clips in the app: see where each clip was recorded and play it
 - **Synced playback** of all of a car's cameras side by side
 - Sharing with family members, two-factor sign-in, alerts to your phone via ntfy
 - **Smart search** ("white pickup truck", "bridge", "snow") and optional **license plate search and
@@ -101,12 +105,14 @@ old ones. It is public: don't use it for anything you distribute.
 | Camera | Recording | Setup |
 | Notifications | Recording status and alerts | Setup |
 | Microphone | Audio recording | Only if you turn audio on |
-| Location | GPS/speed logging, privacy zones, live map | Only if you turn GPS logging on |
+| Location | GPS/speed logging, privacy zones, live map, tracking-only mode | Only if you turn one of those on |
+| Location "Allow all the time" | Resume tracking-only mode after the phone restarts | Only if you turn that option on |
 | Nearby devices (Bluetooth) | Auto-start with your car's Bluetooth | Only if you turn that on |
 | Display over other apps | Lets auto-start open ODC from the background | Only if you use auto-start |
 | Unrestricted battery | Keeps recording reliable | Setup |
 
-ODC only uses location while it's open or recording.
+ODC uses location while it's open or recording, and in the background only when you turn on
+tracking-only mode (with a notification showing while it runs).
 
 ## Known limitations
 
@@ -115,12 +121,9 @@ ODC only uses location while it's open or recording.
 - Clip length is approximate: clips are split by file size, so quiet scenes can run a little longer
 - The speed overlay is a subtitle file, not burned into the video
 - Motion-activated parking keeps the camera running at a low frame rate; time-lapse uses the least battery
-- Privacy zones are added at your current location (no map editor yet)
 
 ## Roadmap
 
-- **Tracking-only mode:** run in the background without recording and report the car's position and
-  speed to your ODC Server (available only once an ODC Server is connected)
 - Crash-resistant recording (fragmented MP4) and a burned-in date/time/speed overlay
 - Drawing privacy zones on a map
 - Recording upright-mounted phones in landscape (cropped)

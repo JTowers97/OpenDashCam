@@ -80,18 +80,23 @@ function ago(t) {
   return fmtDateTime(t);
 }
 /** Imperial for 'mph', metric for 'kmh'; 'auto' follows the browser's region (US, UK, Liberia, Myanmar). */
+/** The browser's region, from its language list or, failing that, its date/number formatting locale. */
+function browserRegion() {
+  const locales = [...(navigator.languages || []), navigator.language, Intl.DateTimeFormat().resolvedOptions().locale];
+  for (const l of locales) {
+    const m = /[-_]([A-Za-z]{2})(?:[-_]|$)/.exec(l || '');
+    if (m) return m[1].toUpperCase();
+  }
+  return null;
+}
+
 function isImperial(units) {
   if (units === 'mph') return true;
   if (units === 'kmh') return false;
-  return /-(US|GB|LR|MM)$/i.test(navigator.language);
+  return ['US', 'GB', 'LR', 'MM'].includes(browserRegion());
 }
 
-function useMph() {
-  const u = state.me?.settings?.units;
-  if (u === 'mph') return true;
-  if (u === 'kmh') return false;
-  return /-(US|GB|LR|MM)$/i.test(navigator.language);
-}
+const useMph = () => isImperial(state.me?.settings?.units);
 const fmtSpeed = (ms) => ms == null ? '' : useMph() ? `${Math.round(ms * 2.23694)} mph` : `${Math.round(ms * 3.6)} km/h`;
 const fmtShortDist = (m) => useMph() ? `${Math.round(m / 0.3048)} ft` : `${Math.round(m)} m`;
 const fmtDist = (m) => useMph() ? `${(m / 1609.34).toFixed(1)} mi` : `${(m / 1000).toFixed(1)} km`;
@@ -1090,7 +1095,7 @@ async function serverSettingsForm(onSaved) {
     f[key] = input;
     return h('label', { class: 'field' }, h('span', {}, label), input, hint ? h('div', { class: 'muted small' }, hint) : null);
   };
-  const units = h('select', {}, [['auto', 'Automatic (from browser language)'], ['mph', 'mph / miles'], ['kmh', 'km/h / km']].map(([v, l]) => h('option', { value: v, selected: s.units === v }, l)));
+  const units = h('select', {}, [['auto', `Automatic (currently ${isImperial('auto') ? 'mph / feet' : 'km/h / meters'})`], ['mph', 'mph / miles / feet'], ['kmh', 'km/h / km / meters']].map(([v, l]) => h('option', { value: v, selected: s.units === v }, l)));
   f.units = units;
   // Stored in meters and km/h; shown in feet and mph when imperial units are selected.
   const M_PER_FT = 0.3048;
@@ -1123,6 +1128,46 @@ async function serverSettingsForm(onSaved) {
   showMismatch();
 
   const smartStatus = h('div', { class: 'stack' });
+
+  // Analyze existing footage (smart search and/or plates), with a scope.
+  const anScope = h('select', {}, [['all', 'All footage'], ['range', 'A date range'], ['car', 'One car']].map(([v, l]) => h('option', { value: v }, l)));
+  const anFrom = h('input', { type: 'date' });
+  const anTo = h('input', { type: 'date' });
+  const anCar = h('select', {}, (state.cars.length ? state.cars : (await api('GET', '/api/cars')).data).map((c) => h('option', { value: c.id }, c.name)));
+  const anSmart = h('input', { type: 'checkbox', checked: true });
+  const anPlates = h('input', { type: 'checkbox', checked: true });
+  const anRedo = h('input', { type: 'checkbox' });
+  const anResult = h('div', { class: 'small' });
+  const anRange = h('div', { class: 'row', style: 'display:none' }, h('span', { class: 'small muted' }, 'From'), anFrom, h('span', { class: 'small muted' }, 'to'), anTo);
+  const anCarRow = h('div', { class: 'row', style: 'display:none' }, anCar);
+  anScope.onchange = () => {
+    anRange.style.display = anScope.value === 'range' ? '' : 'none';
+    anCarRow.style.display = anScope.value === 'car' ? '' : 'none';
+  };
+  const analyzeBox = h('div', { class: 'card stack', style: 'background:var(--panel2)' },
+    h('h3', {}, 'Analyze footage'),
+    h('p', { class: 'muted small' }, 'Footage already on the server is analyzed automatically in the background once a feature is turned on, newest first. Use this to analyze a specific period or car first, to retry, or to analyze clips again (for example after changing settings).'),
+    h('div', { class: 'row' }, anScope), anRange, anCarRow,
+    h('label', { class: 'row small' }, anSmart, 'Smart search'),
+    h('label', { class: 'row small' }, anPlates, 'License plates'),
+    h('label', { class: 'row small' }, anRedo, 'Also redo clips that were already analyzed'),
+    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: async () => {
+      const body = { smart: anSmart.checked, plates: anPlates.checked, redo: anRedo.checked };
+      if (anScope.value === 'range') {
+        if (anFrom.value) body.from = new Date(anFrom.value + 'T00:00:00').getTime();
+        if (anTo.value) body.to = new Date(anTo.value + 'T23:59:59').getTime();
+      }
+      if (anScope.value === 'car') body.car = Number(anCar.value);
+      try {
+        const { data } = await api('POST', '/api/search/analyze', body);
+        const parts = [];
+        if (data.smart) parts.push(`Smart search: ${data.smart.queued} clips waiting`);
+        if (data.plates) parts.push(`Plates: ${data.plates.queued} clips waiting` +
+          (data.plates.skippedOlderThanRetention ? ` (${data.plates.skippedOlderThanRetention} older than your plate retention period are skipped; set retention to 0 to include them)` : ''));
+        anResult.textContent = parts.length ? parts.join(' · ') + '. Progress shows above and on the Search page.' : 'Turn on smart search or license plates first, and save.';
+        refreshSmart();
+      } catch (e) { anResult.textContent = e.message; }
+    } }, 'Analyze')), anResult);
   const plateBox = h('input', { type: 'checkbox' });
   plateBox.checked = !!s.plateSearch;
   const PLATE_NOTICE = (what) => `Before you turn on ${what}\n\n` +
@@ -1152,6 +1197,8 @@ async function serverSettingsForm(onSaved) {
         : !st.ml?.ready ? `Not available: ${st.ml?.error || 'model loading'}`
           : `Ready (${st.ml.model}). ${st.indexed} of ${st.searchable} clips analyzed${st.failed ? `, ${st.failed} couldn’t be read` : ''}.`;
       smartStatus.replaceChildren(h('div', { class: 'small' }, line),
+        st.plateSearch ? h('div', { class: 'small' }, `License plates: read in ${st.platesIndexed} of ${st.platesEligible} clips` +
+          (st.plateRetentionDays ? ` from the last ${st.plateRetentionDays} days` : '') + ` · ${st.distinctPlates} plates, ${st.plateReads} readings.`) : null,
         st.enabled ? h('div', { class: 'row' },
           st.failed ? h('button', { class: 'btn small', onclick: async () => { await api('POST', '/api/search/reindex', { failedOnly: true }); refreshSmart(); } }, 'Retry failed clips') : null,
           h('button', { class: 'btn small', onclick: async () => {
@@ -1200,6 +1247,7 @@ async function serverSettingsForm(onSaved) {
     h('div', { class: 'muted small' }, 'Adds a Plates page listing every plate read, with sightings, notes and tools to fix misreads and merge duplicates.'),
     field('plateRetentionDays', 'Keep plate readings for (days, 0 = forever)', 'number', 'Footage itself is not affected.'),
     field('plateMinConfidence', 'Ignore readings less certain than (0–1)', 'number', 'Default 0.6. Higher means fewer but more reliable readings.'),
+    analyzeBox,
     h('button', { class: 'btn small danger', onclick: async () => {
       if (!confirm('Delete all license plate readings, notes and merges? This can’t be undone.')) return;
       await api('POST', '/api/plates/erase');

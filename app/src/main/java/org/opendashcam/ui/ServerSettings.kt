@@ -32,6 +32,11 @@ import org.opendashcam.backup.BackupScheduler
 import org.opendashcam.backup.ServerClient
 import org.opendashcam.backup.ServerReporter
 import org.opendashcam.settings.OdcSettings
+import org.opendashcam.tracking.TrackingService
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.text.DateFormat
 import java.util.Date
 
@@ -96,6 +101,8 @@ fun ServerSection(settings: OdcSettings, onChanged: () -> Unit, onOpenServerClip
         Hint("Connect this phone to your self-hosted ODC Server to back up footage there and use the server's features:")
         SERVER_FEATURES.forEach { Hint("• $it") }
         Hint("Everything else works without a server.")
+        Text("Tracking-only mode", style = MaterialTheme.typography.bodyLarge)
+        Hint("Reports the car's position and speed to your ODC Server in the background without recording. Available once this phone is connected to a server.")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(enabled = !busy, onClick = {
                 scanner.launch(
@@ -133,6 +140,7 @@ fun ServerSection(settings: OdcSettings, onChanged: () -> Unit, onOpenServerClip
             subtitle = if (settings.gpsEnabled) "Every 5 seconds while recording. Never inside privacy zones."
             else "Needs GPS logging (Settings → Location).",
         )
+        TrackingControls(settings, onChanged)
         Hint("What gets uploaded and when is set under Backup rules below.")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onOpenServerClips) { Text("Clips on the server") }
@@ -170,6 +178,7 @@ fun ServerSection(settings: OdcSettings, onChanged: () -> Unit, onOpenServerClip
             confirmButton = {
                 TextButton(onClick = {
                     confirmUnpair = false
+                    TrackingService.stop(context)
                     settings.clearServer()
                     BackupScheduler.kick(context, replace = true)
                     onChanged()
@@ -205,4 +214,85 @@ private fun ManualPairDialog(onDismiss: () -> Unit, onPair: (String, String, Str
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+
+/** Settings for tracking-only mode (shown once a server is paired). */
+@Composable
+private fun TrackingControls(settings: OdcSettings, onChanged: () -> Unit) {
+    val context = LocalContext.current
+    val tracking by TrackingService.state.collectAsStateWithLifecycle()
+    fun enable() {
+        settings.trackingEnabled = true
+        TrackingService.start(context)
+        onChanged()
+    }
+    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        if (TrackingService.hasLocationPermission(context)) enable()
+        else Toast.makeText(context, "Tracking needs precise location access.", Toast.LENGTH_LONG).show()
+    }
+    val backgroundLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        settings.trackingAfterRestart = ok
+        if (!ok) Toast.makeText(context, "Without \"Allow all the time\", open ODC once after a restart to resume tracking.", Toast.LENGTH_LONG).show()
+        onChanged()
+    }
+
+    SwitchRow(
+        title = "Tracking-only mode",
+        checked = settings.trackingEnabled && TrackingService.hasLocationPermission(context),
+        onChange = { on ->
+            if (!on) {
+                settings.trackingEnabled = false
+                TrackingService.stop(context)
+                onChanged()
+            } else if (TrackingService.hasLocationPermission(context)) {
+                enable()
+            } else {
+                locationLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+            }
+        },
+        subtitle = "Reports the car's position and speed to the server in the background, without recording. " +
+            "Keeps running after you leave ODC (with a notification). Uses GPS while the car moves; almost no battery while parked. " +
+            "Pauses while ODC is recording, and never logs inside privacy zones. Positions are saved on the phone and sent later if there's no connection.",
+    )
+    if (settings.trackingEnabled) {
+        ChoiceRow(
+            title = "Update every",
+            options = listOf(5, 10, 30, 60),
+            selected = settings.trackingIntervalSec,
+            label = { "$it s" },
+            onSelect = { sec ->
+                settings.trackingIntervalSec = sec
+                TrackingService.stop(context)
+                TrackingService.start(context)
+                onChanged()
+            },
+            subtitle = "While driving. More often gives a smoother route on the map but uses more battery and data.",
+        )
+        SwitchRow(
+            title = "Keep tracking after the phone restarts",
+            checked = settings.trackingAfterRestart && TrackingService.hasBackgroundPermission(context),
+            onChange = { on ->
+                if (!on) {
+                    settings.trackingAfterRestart = false
+                    onChanged()
+                } else if (TrackingService.hasBackgroundPermission(context)) {
+                    settings.trackingAfterRestart = true
+                    onChanged()
+                } else {
+                    backgroundLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                }
+            },
+            subtitle = "Needs location access set to \"Allow all the time\" (Android will ask). Otherwise, open ODC once after a restart.",
+        )
+        val status = when {
+            !tracking.active -> "Not running. Open ODC to start it."
+            tracking.pausedForRecording -> "Paused while ODC is recording."
+            tracking.lastError != null -> tracking.lastError!!
+            tracking.lastSentAt > 0 -> "Running · last sent " + DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(tracking.lastSentAt)) +
+                if (tracking.queued > 0) " · ${tracking.queued} points waiting" else ""
+            else -> "Running · waiting for the car to move."
+        }
+        Hint(status)
+    }
 }

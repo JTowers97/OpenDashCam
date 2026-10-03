@@ -39,6 +39,14 @@ class ServerClient(baseUrl: String, private val token: String?) {
         json("POST", "/api/v1/live", b)
     }
 
+    /** Tracking-only mode: a batch of points (possibly collected while offline). */
+    fun track(points: JSONArray) {
+        json("POST", "/api/v1/track", JSONObject().put("points", points))
+    }
+
+    fun locatedClips(limit: Int = 1000): JSONArray =
+        json("GET", "/api/v1/clips?located=1&limit=$limit", null).getJSONArray("clips")
+
     fun event(type: String, message: String, data: JSONObject = JSONObject()) {
         json("POST", "/api/v1/events", JSONObject().put("type", type).put("t", System.currentTimeMillis()).put("message", message).put("data", data))
     }

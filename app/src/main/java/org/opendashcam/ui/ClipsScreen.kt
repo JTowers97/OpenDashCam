@@ -109,7 +109,13 @@ private object Thumbnails {
 }
 
 @Composable
-fun ClipsScreen(settings: OdcSettings, onBack: () -> Unit, onOpenServerClips: () -> Unit, modifier: Modifier = Modifier) {
+fun ClipsScreen(
+    settings: OdcSettings,
+    onBack: () -> Unit,
+    onOpenServerClips: () -> Unit,
+    onOpenMap: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
     val storage = remember { ClipStorage(context, settings) }
     val state by RecordingService.state.collectAsStateWithLifecycle()
@@ -206,6 +212,7 @@ fun ClipsScreen(settings: OdcSettings, onBack: () -> Unit, onOpenServerClips: ()
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f)) { ScreenHeader("Clips", onBack) }
             if (settings.serverPaired) {
+                TextButton(onClick = onOpenMap) { Text("Map") }
                 TextButton(onClick = onOpenServerClips) { Text("On server") }
             }
             if (settings.smbEnabled || settings.serverPaired) {

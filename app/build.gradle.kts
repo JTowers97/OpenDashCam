@@ -17,7 +17,7 @@ android {
         val ciBuild = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
         val commit = System.getenv("GITHUB_SHA")?.take(7) ?: "local"
         versionCode = 1000 + (ciBuild ?: 0)
-        versionName = "0.4.1"
+        versionName = "0.8.0"
         buildConfigField("String", "BUILD_LABEL", "\"${ciBuild?.let { "build $it" } ?: "local build"} · $commit\"")
     }
 
@@ -70,7 +70,7 @@ android {
 
 base {
     // APK file name includes the version: OpenDashCam-0.4.0-debug.apk
-    archivesName.set("OpenDashCam-0.4.1")
+    archivesName.set("OpenDashCam-0.8.0")
 }
 
 dependencies {
@@ -85,6 +85,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
+    // Maps (privacy zone editor, clip map): MapLibre with OpenStreetMap data, no API key, BSD-2
+    implementation("org.maplibre.gl:android-sdk:11.5.2")
 
     // QR scanning for server pairing (ZXing, Apache 2.0, no Google Play Services)
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")

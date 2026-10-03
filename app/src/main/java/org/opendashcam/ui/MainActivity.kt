@@ -26,8 +26,9 @@ import org.opendashcam.autostart.StandbyService
 import org.opendashcam.backup.BackupScheduler
 import org.opendashcam.recording.RecordingService
 import org.opendashcam.settings.OdcSettings
+import org.opendashcam.tracking.TrackingService
 
-enum class Screen { ONBOARDING, HOME, SETTINGS, CLIPS, PRIVACY_ZONES, SERVER_CLIPS }
+enum class Screen { ONBOARDING, HOME, SETTINGS, CLIPS, PRIVACY_ZONES, SERVER_CLIPS, SERVER_MAP }
 
 class MainActivity : ComponentActivity() {
     private lateinit var settings: OdcSettings
@@ -54,6 +55,8 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (settings.onboardingDone && settings.smbEnabled) BackupScheduler.kick(this)
+        // Tracking-only mode: make sure it's running (e.g. after the app was updated or Android stopped it).
+        if (settings.onboardingDone && TrackingService.canRun(this, settings) && !TrackingService.state.value.active) TrackingService.start(this)
         // Re-arm charging auto-start whenever ODC is opened (Android allows it while on screen).
         if (settings.onboardingDone && settings.autoStartCharging && !RecordingService.state.value.active) {
             StandbyService.start(this)
@@ -90,6 +93,7 @@ fun OdcRoot(settings: OdcSettings, autoStartRequests: Int) {
         screen = when (screen) {
             Screen.PRIVACY_ZONES -> Screen.SETTINGS
             Screen.SERVER_CLIPS -> serverClipsBack
+            Screen.SERVER_MAP -> Screen.CLIPS
             else -> Screen.HOME
         }
     }
@@ -120,8 +124,10 @@ fun OdcRoot(settings: OdcSettings, autoStartRequests: Int) {
                 settings,
                 onBack = { screen = Screen.HOME },
                 onOpenServerClips = { serverClipsBack = Screen.CLIPS; screen = Screen.SERVER_CLIPS },
+                onOpenMap = { screen = Screen.SERVER_MAP },
                 modifier = Modifier.safeDrawingPadding(),
             )
+            Screen.SERVER_MAP -> ServerMapScreen(settings, onBack = { screen = Screen.CLIPS }, modifier = Modifier.safeDrawingPadding())
             Screen.SERVER_CLIPS -> ServerClipsScreen(settings, onBack = { screen = serverClipsBack }, modifier = Modifier.safeDrawingPadding())
             Screen.PRIVACY_ZONES -> PrivacyZonesScreen(
                 settings, onBack = { screen = Screen.SETTINGS }, modifier = Modifier.safeDrawingPadding(),

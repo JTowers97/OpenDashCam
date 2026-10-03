@@ -11,8 +11,8 @@ built-in database; an optional second container adds smart search.
   browsers that can't play H.265; originals are kept)
 - **Synced playback:** all of a car's cameras side by side on one clock, moving through consecutive
   clips, with speed and a moving marker on the map; 1×–8× speed
-- **Map:** live position of each car while ODC is recording, last-seen position otherwise, and route
-  history by day (OpenStreetMap data via OpenFreeMap; any MapLibre style works)
+- **Map:** live position of each car while ODC is recording or in tracking-only mode, last-seen
+  position otherwise, and route history by day (OpenStreetMap data via OpenFreeMap; any MapLibre style works)
 - **Trips:** detected automatically from GPS tracks and named by place ("Springfield, IL → Chicago, IL");
   split and merge trips; optional **commute learning** names trips "Home → Work" and keeps a short stop
   from splitting a commute
@@ -90,8 +90,11 @@ the moment that matched. This uses an extra container that runs OpenAI's CLIP mo
    `./ml-cache`
 3. In the web app: Settings → Smart search → turn it on → Save
 
-Footage is analyzed in the background, newest first, at about one frame every 10 seconds of video.
-Progress shows on the Search page. The ML container needs about 1.5 GB of RAM. Without a GPU, analysis
+Footage already on the server is analyzed in the background as soon as the feature is turned on,
+newest first, at about one frame every 10 seconds of video; new clips are analyzed as they arrive.
+Progress shows on the Search page and in Settings. **Analyze footage** (Settings) lets you analyze a
+specific date range or car first, retry clips that failed, or analyze clips again. The ML container
+needs about 1.5 GB of RAM. Without a GPU, analysis
 takes roughly a second or two per minute of footage on a typical home server; searching is instant.
 
 ## License plates (optional)

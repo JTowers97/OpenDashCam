@@ -156,11 +156,11 @@ export function registerWebRoutes(router, app) {
     const before = prev.commuteLearning;
     saveSettings(db, await readJson(ctx.req));
     const after = getSettings(db);
-    if (after.smartSearch && (!prev.smartSearch || prev.mlUrl !== after.mlUrl)) runIndexer(db).catch(() => {});
+    if (after.smartSearch && (!prev.smartSearch || prev.mlUrl !== after.mlUrl)) app.analyzeNow?.();
     if (!after.plateSearch && after.plateLog) saveSettings(db, { plateLog: false }); // the log needs plate reading
     if (after.plateSearch) {
       purgeOldPlates(db);
-      if (!prev.plateSearch) runPlateIndexer(db).catch(() => {});
+      if (!prev.plateSearch) app.analyzeNow?.();
     }
     if (before !== after.commuteLearning) {
       for (const c of db.all('SELECT id FROM cars')) {
@@ -631,8 +631,40 @@ export function registerWebRoutes(router, app) {
     requireAdmin(ctx);
     const b = await readJson(ctx.req);
     resetIndex(db, b.failedOnly !== false);
-    runIndexer(db).catch(() => {});
+    app.analyzeNow?.();
     send(ctx.res, 200, indexStats(db));
+  });
+
+  /**
+   * Analyze existing footage for smart search and/or plates: all footage, a date range and/or one car.
+   * Clips already analyzed are skipped unless `redo` is set. Work happens in the background.
+   */
+  router.add('POST', '/api/search/analyze', async (ctx) => {
+    requireAdmin(ctx);
+    const b = await readJson(ctx.req);
+    const s = getSettings(db);
+    const where = ['encrypted = 0'];
+    const params = [];
+    if (b.from) { where.push('started_at >= ?'); params.push(Number(b.from)); }
+    if (b.to) { where.push('started_at <= ?'); params.push(Number(b.to)); }
+    if (b.car) { where.push('car_id = ?'); params.push(Number(b.car)); }
+    const w = where.join(' AND ');
+    const out = {};
+    if (b.smart !== false && s.smartSearch) {
+      const r = db.run(`UPDATE clips SET indexed = 0 WHERE ${w} AND indexed ${b.redo ? '!= 0' : '= -1'}`, ...params);
+      out.smart = { queued: db.get(`SELECT COUNT(*) n FROM clips WHERE ${w} AND indexed = 0`, ...params).n, reset: r.changes };
+    }
+    if (b.plates !== false && s.plateSearch) {
+      const r = db.run(`UPDATE clips SET plates_indexed = 0 WHERE ${w} AND plates_indexed ${b.redo ? '!= 0' : '= -1'}`, ...params);
+      const cutoff = s.plateRetentionDays > 0 ? now() - s.plateRetentionDays * 86400_000 : 0;
+      out.plates = {
+        queued: db.get(`SELECT COUNT(*) n FROM clips WHERE ${w} AND plates_indexed = 0 AND started_at >= ?`, ...params, cutoff).n,
+        reset: r.changes,
+        skippedOlderThanRetention: db.get(`SELECT COUNT(*) n FROM clips WHERE ${w} AND started_at < ?`, ...params, cutoff).n,
+      };
+    }
+    app.analyzeNow?.();
+    send(ctx.res, 200, out);
   });
 
   /**

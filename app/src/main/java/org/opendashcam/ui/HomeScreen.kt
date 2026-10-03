@@ -59,6 +59,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.opendashcam.AppVersion
 import org.opendashcam.recording.RecordingService
+import org.opendashcam.tracking.TrackingService
 import org.opendashcam.settings.CameraMode
 import org.opendashcam.settings.DisplayMode
 import org.opendashcam.settings.OdcSettings
@@ -206,6 +207,15 @@ fun HomeScreen(
                     OutlinedButton(onClick = onOpenSettings, modifier = Modifier.weight(1f)) { Text("Settings") }
                 }
 
+                val tracking by TrackingService.state.collectAsStateWithLifecycle()
+                if (tracking.active && !active) {
+                    Text(
+                        "Tracking-only mode is on: reporting the car's location to your ODC Server in the background." +
+                            if (tracking.queued > 0) " ${tracking.queued} points waiting to send." else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 if (!isIgnoringBatteryOptimizations(context)) {
                     Text(
                         "Battery optimization is on for ODC. Android may stop recording in the background. " +

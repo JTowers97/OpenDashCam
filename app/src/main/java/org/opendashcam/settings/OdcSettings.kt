@@ -108,6 +108,11 @@ class OdcSettings(context: Context) {
     var serverUploadEnabled by bool("server_upload", true)
     var serverLiveEnabled by bool("server_live", true)
 
+    // Tracking-only mode (needs a paired ODC Server)
+    var trackingEnabled by bool("tracking_enabled", false)
+    var trackingIntervalSec by int("tracking_interval", 10)
+    var trackingAfterRestart by bool("tracking_after_restart", false)
+
     // Auto-start
     var autoStartCharging by bool("autostart_charging", false)
     var autoStartBluetooth by bool("autostart_bluetooth", false)
@@ -175,6 +180,7 @@ class OdcSettings(context: Context) {
     val serverKey: String get() = "${serverUrl.trimEnd('/')}#$serverCameraId"
 
     fun clearServer() {
+        trackingEnabled = false
         serverToken = null
         serverUrl = ""
         serverCameraId = ""

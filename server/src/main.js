@@ -139,11 +139,26 @@ const every = (ms, fn) => setInterval(() => { try { fn(); } catch (e) { console.
 every(Number(process.env.ODC_TRIP_INTERVAL_MS) || 30_000, () => rebuildDirtyTrips(db));
 every(60_000, checkOffline);
 // Smart search indexing runs in the background whenever there are new clips and the ML service is up.
-every(Number(process.env.ODC_INDEX_INTERVAL_MS) || 30_000, () => {
-  runIndexer(db)
-    .then(() => runPlateIndexer(db))
-    .catch((e) => console.warn('indexer:', e.message));
-});
+// Analysis runs in batches and keeps going while there's a backlog (e.g. existing footage after turning a
+// feature on), then waits for new clips. Smart search and plates take turns so neither starves the other.
+let analyzing = false;
+async function analyzeLoop() {
+  if (analyzing) return;
+  analyzing = true;
+  try {
+    for (;;) {
+      const a = await runIndexer(db, 10);
+      const b = await runPlateIndexer(db, 5);
+      if (!a && !b) break;
+    }
+  } catch (e) {
+    console.warn('analysis:', e.message);
+  } finally {
+    analyzing = false;
+  }
+}
+app.analyzeNow = () => { analyzeLoop(); };
+every(Number(process.env.ODC_INDEX_INTERVAL_MS) || 30_000, analyzeLoop);
 every(3600_000, () => { enforceRetention(); cleanUploads(); learnAllPlaces(); purgeOldPlates(db); });
 
 // Finish processing for clips that arrived before a restart.
@@ -158,6 +173,11 @@ registerWebRoutes(router, app);
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 
+/**
+ * Static web app. Browsers must check for a newer version on every load (with a cheap 304 when nothing
+ * changed), and index.html links the script and styles with the server version, so an update is
+ * picked up immediately instead of after the browser's cache expires.
+ */
 function serveStatic(req, res, pathname) {
   let rel = decodeURIComponent(pathname);
   if (rel === '/' || !path.extname(rel)) rel = '/index.html'; // single-page app
@@ -165,12 +185,27 @@ function serveStatic(req, res, pathname) {
   if (!file.startsWith(config.publicDir) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
     return send(res, 404, { error: 'Not found' });
   }
-  res.writeHead(200, {
+  const stat = fs.statSync(file);
+  const etag = `"${config.version}-${stat.size}-${Math.round(stat.mtimeMs)}"`;
+  const headers = {
     'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-    'Cache-Control': rel === '/index.html' ? 'no-cache' : 'public, max-age=3600',
+    'Cache-Control': 'no-cache',
+    ETag: etag,
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'same-origin',
-  });
+  };
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304, headers);
+    return res.end();
+  }
+  if (rel === '/index.html') {
+    const html = fs.readFileSync(file, 'utf8')
+      .replace('src="/app.js"', `src="/app.js?v=${config.version}-${Math.round(fs.statSync(path.join(config.publicDir, 'app.js')).mtimeMs)}"`)
+      .replace('href="/style.css"', `href="/style.css?v=${config.version}-${Math.round(fs.statSync(path.join(config.publicDir, 'style.css')).mtimeMs)}"`);
+    res.writeHead(200, headers);
+    return res.end(html);
+  }
+  res.writeHead(200, headers);
   fs.createReadStream(file).pipe(res);
 }
 

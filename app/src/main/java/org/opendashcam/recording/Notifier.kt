@@ -15,6 +15,8 @@ object Notifier {
     const val CHANNEL_RECORDING = "recording"
     const val CHANNEL_ALERTS = "alerts"
     const val CHANNEL_STANDBY = "standby"
+    const val CHANNEL_TRACKING = "tracking"
+    const val TRACKING_ID = 4
     const val STANDBY_ID = 2
     const val AUTOSTART_PROMPT_ID = 3
     const val RECORDING_ID = 1
@@ -30,6 +32,11 @@ object Notifier {
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ALERTS, "Alerts", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Storage, battery, temperature and impact alerts"
+            }
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_TRACKING, "Tracking-only mode", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Shown while ODC reports the car's location to your ODC Server"
             }
         )
         nm.createNotificationChannel(
@@ -53,6 +60,30 @@ object Notifier {
             .setContentIntent(open)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
+    }
+
+    fun tracking(context: Context, text: String): Notification {
+        val open = PendingIntent.getActivity(
+            context, 6,
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        return NotificationCompat.Builder(context, CHANNEL_TRACKING)
+            .setSmallIcon(R.drawable.ic_stat_odc)
+            .setContentTitle("Tracking for ODC Server")
+            .setContentText(text)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(open)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .build()
+    }
+
+    fun updateTracking(context: Context, text: String) {
+        try {
+            context.getSystemService(NotificationManager::class.java).notify(TRACKING_ID, tracking(context, text))
+        } catch (_: SecurityException) {
+        }
     }
 
     /** Fallback when Android won't let ODC open itself: a notification the user taps to start. */

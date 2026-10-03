@@ -1,5 +1,22 @@
 # Changelog
 
+## App 0.8.0 · Server 0.8.0
+- **App:** privacy zones are drawn and edited on a map: tap to add, tap a zone to change it, tap again to move it
+- **App:** tracking-only mode (with an ODC Server): reports position and speed in the background without
+  recording; keeps positions while offline and sends them later; pauses while recording; optionally
+  resumes after a restart
+- **App:** Map View in Clips (with an ODC Server): clips shown where they were recorded, grouped when close
+  together; tap to play
+- **Server:** analyze existing footage for smart search and plates by date range or car, retry failures or
+  redo analysis; background analysis keeps going until the backlog is done
+- **Server:** accepts tracking-only positions, including batches sent late after being offline
+
+## Server 0.7.1
+- Fixed: after updating the server, browsers could keep using the old web app for up to an hour, so new
+  features and fixes didn't appear until a hard refresh. Updates now show on the next page load
+- Units set to "Automatic" also work when the browser's language has no country (falls back to the
+  browser's regional format), and the setting shows which units it picked
+
 ## App 0.4.1 · Server 0.7.0
 - **Server:** optional license plate reading and search, and an optional plate log with a review page
   for each plate: cropped sightings, fix misreads, remove false readings, merge duplicates (likely

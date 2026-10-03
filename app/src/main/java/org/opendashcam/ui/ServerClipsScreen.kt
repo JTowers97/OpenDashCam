@@ -54,7 +54,7 @@ import java.net.URL
 import java.text.DateFormat
 import java.util.Date
 
-private object RemoteThumbs {
+internal object RemoteThumbs {
     private val cache = LruCache<String, ImageBitmap>(80)
     suspend fun load(url: String): ImageBitmap? {
         val key = url.substringBefore('?')
