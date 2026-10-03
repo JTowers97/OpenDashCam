@@ -1,0 +1,43 @@
+# Copy this file to docker-compose.yml and edit it. Updates never overwrite your docker-compose.yml.
+#
+# Start the server:                         docker compose up -d --build
+# Start it with smart search (optional ML): docker compose --profile ml up -d --build
+services:
+  opendashcam:
+    build: .
+    # Or, once the "Server" GitHub workflow has published an image, use it instead of `build`:
+    # image: ghcr.io/YOUR_GITHUB_USERNAME/opendashcam-server:latest
+    container_name: opendashcam
+    restart: unless-stopped
+    ports:
+      # HOST:CONTAINER. Change the left number to use another port; keep 8080 on the right.
+      - "8080:8080"
+    environment:
+      # The address PHONES use to reach the server; it goes into the pairing QR code.
+      # On your home network, use this computer's LAN IP, e.g. http://192.168.1.50:8080
+      # For access from anywhere, put it behind HTTPS and use e.g. https://opendashcam.example.com
+      - ODC_PUBLIC_URL=http://192.168.1.50:8080
+      # Set to 1 only when running behind a reverse proxy.
+      - ODC_TRUST_PROXY=0
+      - TZ=America/New_York
+      # Where the optional ML service is (only used when smart search is turned on in Settings).
+      - ODC_ML_URL=http://opendashcam-ml:3003
+    volumes:
+      # Database, footage and caches. Back this folder up.
+      - ./data:/data
+
+  # Optional: smart search ("red pickup truck", "bridge", "snow"). Analyzes footage on this machine
+  # with the CLIP model. Needs about 1.5 GB of RAM; the model (~600 MB) downloads on first start.
+  # Started only with: docker compose --profile ml up -d --build
+  opendashcam-ml:
+    profiles: ["ml"]
+    build: ./ml
+    container_name: opendashcam-ml
+    restart: unless-stopped
+    environment:
+      # CPU threads to use for analysis (default: half the CPU cores).
+      # - ODC_ML_THREADS=2
+      - TZ=America/New_York
+    volumes:
+      - ./ml-cache:/cache
+    # No ports: only the ODC server talks to it, over Docker's internal network.

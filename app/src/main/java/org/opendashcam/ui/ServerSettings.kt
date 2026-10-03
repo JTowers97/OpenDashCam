@@ -1,0 +1,208 @@
+package org.opendashcam.ui
+
+import android.os.Build
+import android.widget.Toast
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.opendashcam.AppVersion
+import org.opendashcam.backup.BackupScheduler
+import org.opendashcam.backup.ServerClient
+import org.opendashcam.backup.ServerReporter
+import org.opendashcam.settings.OdcSettings
+import java.text.DateFormat
+import java.util.Date
+
+private val SERVER_FEATURES = listOf(
+    "Synced playback of all of a car's cameras (coming soon)",
+    "Trips with routes, distance and speeds",
+    "Live map of where each car is",
+    "Browsing footage from any browser, shared with family",
+    "Smart search (coming later)",
+)
+
+/** Settings → ODC Server: pair, status, options, unpair. */
+@Composable
+fun ServerSection(settings: OdcSettings, onChanged: () -> Unit, onOpenServerClips: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var showManual by remember { mutableStateOf(false) }
+    var confirmUnpair by remember { mutableStateOf(false) }
+    var checkResult by remember { mutableStateOf<String?>(null) }
+
+    fun pair(url: String, code: String, label: String?) {
+        busy = true
+        error = null
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    val p = ServerClient(url, null).pair(code, label, "${Build.MANUFACTURER} ${Build.MODEL}", AppVersion.full)
+                    settings.serverUrl = url.trim().trimEnd('/')
+                    settings.serverToken = p.token
+                    settings.serverCameraId = p.cameraId
+                    settings.serverCarName = p.carName
+                    settings.serverCameraLabel = p.label
+                    settings.serverUploadEnabled = true
+                    null
+                } catch (e: Exception) {
+                    e.message ?: e.javaClass.simpleName
+                }
+            }
+            busy = false
+            if (result == null) {
+                Toast.makeText(context, "Connected to ${settings.serverCarName}.", Toast.LENGTH_LONG).show()
+                BackupScheduler.kick(context, replace = true)
+                onChanged()
+            } else {
+                error = "Pairing failed: $result"
+            }
+        }
+    }
+
+    val scanner = rememberLauncherForScan { text ->
+        val parsed = text?.let { ServerClient.parseQr(it) }
+        if (parsed == null) {
+            if (text != null) error = "That QR code isn't an ODC pairing code."
+        } else {
+            pair(parsed.first, parsed.second, null)
+        }
+    }
+
+    if (!settings.serverPaired) {
+        Hint("Connect this phone to your self-hosted ODC Server to back up footage there and use the server's features:")
+        SERVER_FEATURES.forEach { Hint("• $it") }
+        Hint("Everything else works without a server.")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(enabled = !busy, onClick = {
+                scanner.launch(
+                    ScanOptions()
+                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        .setPrompt("Scan the pairing code from the ODC Server (Cars → Connect a phone)")
+                        .setBeepEnabled(false)
+                        .setOrientationLocked(false)
+                )
+            }) { Text(if (busy) "Connecting…" else "Scan pairing code") }
+            OutlinedButton(enabled = !busy, onClick = { showManual = true }) { Text("Enter code") }
+        }
+    } else {
+        Text("Connected to ${settings.serverCarName} · ${settings.serverCameraLabel}", style = MaterialTheme.typography.bodyLarge)
+        Hint(settings.serverUrl)
+        if (settings.serverUrl.startsWith("http://")) {
+            Text(
+                "This connection isn't encrypted. Fine on your home network; use an https:// address for access from elsewhere.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+            )
+        }
+        val last = ServerReporter.lastContactAt
+        if (last > 0) Hint("Last contact: " + DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(last)))
+        ServerReporter.lastError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+        SwitchRow(
+            title = "Back up footage to the server",
+            checked = settings.serverUploadEnabled,
+            onChange = { on -> settings.serverUploadEnabled = on; BackupScheduler.kick(context, replace = true); onChanged() },
+            subtitle = "Clips are sent over the connection above. Clips you encrypted on the phone stay encrypted on the server.",
+        )
+        SwitchRow(
+            title = "Share live location with the server",
+            checked = settings.serverLiveEnabled,
+            onChange = { on -> settings.serverLiveEnabled = on; onChanged() },
+            subtitle = if (settings.gpsEnabled) "Every 5 seconds while recording. Never inside privacy zones."
+            else "Needs GPS logging (Settings → Location).",
+        )
+        Hint("What gets uploaded and when is set under Backup rules below.")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onOpenServerClips) { Text("Clips on the server") }
+            OutlinedButton(enabled = !busy, onClick = {
+                busy = true
+                scope.launch {
+                    checkResult = withContext(Dispatchers.IO) {
+                        try {
+                            val me = ServerClient(settings.serverUrl, settings.serverToken).me()
+                            "✓ ${me.optString("serverName")} ${me.optString("serverVersion")} · ${me.optString("carName")} · ${me.optString("label")}"
+                        } catch (e: Exception) {
+                            "✗ ${e.message ?: e.javaClass.simpleName}"
+                        }
+                    }
+                    busy = false
+                }
+            }) { Text("Check connection") }
+        }
+        checkResult?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        TextButton(onClick = { confirmUnpair = true }) { Text("Disconnect from server") }
+    }
+    error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+
+    if (showManual) {
+        ManualPairDialog(onDismiss = { showManual = false }) { url, code, label ->
+            showManual = false
+            pair(url, code, label)
+        }
+    }
+    if (confirmUnpair) {
+        AlertDialog(
+            onDismissRequest = { confirmUnpair = false },
+            title = { Text("Disconnect from the server?") },
+            text = { Text("This phone stops uploading and sharing its location. Footage already on the server stays there. To also remove this phone on the server, use Cars → Disconnect in the web app.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmUnpair = false
+                    settings.clearServer()
+                    BackupScheduler.kick(context, replace = true)
+                    onChanged()
+                }) { Text("Disconnect") }
+            },
+            dismissButton = { TextButton(onClick = { confirmUnpair = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+private fun rememberLauncherForScan(onResult: (String?) -> Unit) =
+    androidx.activity.compose.rememberLauncherForActivityResult(ScanContract()) { result -> onResult(result.contents) }
+
+@Composable
+private fun ManualPairDialog(onDismiss: () -> Unit, onPair: (String, String, String?) -> Unit) {
+    var url by remember { mutableStateOf("https://") }
+    var code by remember { mutableStateOf("") }
+    var label by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Connect to an ODC Server") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("On the server: Cars → Connect a phone shows the address and an 8-character code.", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(value = url, onValueChange = { url = it.trim() }, label = { Text("Server address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = code, onValueChange = { code = it.uppercase().filter { c -> c.isLetterOrDigit() }.take(8) }, label = { Text("Pairing code") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = label, onValueChange = { label = it.take(40) }, label = { Text("Camera name (optional)") }, placeholder = { Text("e.g. Front, Rear") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = url.length > 8 && code.length == 8, onClick = { onPair(url, code, label.ifBlank { null }) }) { Text("Connect") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}

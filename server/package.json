@@ -1,0 +1,15 @@
+{
+  "name": "opendashcam-server",
+  "version": "0.7.0",
+  "description": "Self-hosted server for Open Dash Cam: footage timeline, live map, trips and backups.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/main.js",
+    "test": "node --disable-warning=ExperimentalWarning test/api.test.js && node --disable-warning=ExperimentalWarning test/phase4b.test.js && node --disable-warning=ExperimentalWarning test/phase5.test.js"
+  }
+}

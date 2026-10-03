@@ -1,0 +1,131 @@
+package org.opendashcam.ui
+
+import android.app.Activity
+import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import org.opendashcam.autostart.AutoStart
+import org.opendashcam.autostart.StandbyService
+import org.opendashcam.backup.BackupScheduler
+import org.opendashcam.recording.RecordingService
+import org.opendashcam.settings.OdcSettings
+
+enum class Screen { ONBOARDING, HOME, SETTINGS, CLIPS, PRIVACY_ZONES, SERVER_CLIPS }
+
+class MainActivity : ComponentActivity() {
+    private lateinit var settings: OdcSettings
+
+    /** Incremented each time an auto-start (charging / Bluetooth) opens this screen. */
+    private var autoStartRequests by mutableIntStateOf(0)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        settings = OdcSettings(this)
+        handleIntent(intent, fresh = savedInstanceState == null)
+        setContent {
+            OdcTheme { OdcRoot(settings, autoStartRequests) }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent, fresh = true)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (settings.onboardingDone && settings.smbEnabled) BackupScheduler.kick(this)
+        // Re-arm charging auto-start whenever ODC is opened (Android allows it while on screen).
+        if (settings.onboardingDone && settings.autoStartCharging && !RecordingService.state.value.active) {
+            StandbyService.start(this)
+        }
+    }
+
+    private fun handleIntent(intent: Intent?, fresh: Boolean) {
+        if (fresh && intent?.getStringExtra(AutoStart.EXTRA_AUTO_START) != null && settings.onboardingDone) {
+            intent.removeExtra(AutoStart.EXTRA_AUTO_START)
+            autoStartRequests++
+        }
+    }
+}
+
+@Composable
+fun OdcRoot(settings: OdcSettings, autoStartRequests: Int) {
+    var screen by rememberSaveable {
+        mutableStateOf(if (settings.onboardingDone) Screen.HOME else Screen.ONBOARDING)
+    }
+    var serverClipsBack by rememberSaveable { mutableStateOf(Screen.CLIPS) }
+    // Only the recording screen is forced to landscape; clips, settings and setup follow the phone.
+    val activity = LocalContext.current as? Activity
+    LaunchedEffect(screen) {
+        activity?.requestedOrientation = if (screen == Screen.HOME) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+    LaunchedEffect(autoStartRequests) {
+        if (autoStartRequests > 0 && screen != Screen.ONBOARDING) screen = Screen.HOME
+    }
+    BackHandler(enabled = screen != Screen.HOME && screen != Screen.ONBOARDING) {
+        screen = when (screen) {
+            Screen.PRIVACY_ZONES -> Screen.SETTINGS
+            Screen.SERVER_CLIPS -> serverClipsBack
+            else -> Screen.HOME
+        }
+    }
+
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        when (screen) {
+            Screen.ONBOARDING -> OnboardingScreen(settings) { customize ->
+                screen = if (customize) Screen.SETTINGS else Screen.HOME
+            }
+            Screen.HOME -> HomeScreen(
+                settings,
+                autoStartRequests = autoStartRequests,
+                onOpenSettings = { screen = Screen.SETTINGS },
+                onOpenClips = { screen = Screen.CLIPS },
+            )
+            Screen.SETTINGS -> SettingsScreen(
+                settings,
+                onBack = { screen = Screen.HOME },
+                onRerunSetup = {
+                    settings.onboardingDone = false
+                    screen = Screen.ONBOARDING
+                },
+                onOpenPrivacyZones = { screen = Screen.PRIVACY_ZONES },
+                onOpenServerClips = { serverClipsBack = Screen.SETTINGS; screen = Screen.SERVER_CLIPS },
+                modifier = Modifier.safeDrawingPadding(),
+            )
+            Screen.CLIPS -> ClipsScreen(
+                settings,
+                onBack = { screen = Screen.HOME },
+                onOpenServerClips = { serverClipsBack = Screen.CLIPS; screen = Screen.SERVER_CLIPS },
+                modifier = Modifier.safeDrawingPadding(),
+            )
+            Screen.SERVER_CLIPS -> ServerClipsScreen(settings, onBack = { screen = serverClipsBack }, modifier = Modifier.safeDrawingPadding())
+            Screen.PRIVACY_ZONES -> PrivacyZonesScreen(
+                settings, onBack = { screen = Screen.SETTINGS }, modifier = Modifier.safeDrawingPadding(),
+            )
+        }
+    }
+}
