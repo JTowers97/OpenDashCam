@@ -11,6 +11,9 @@ import { HttpError, now, num, readJson, send, sha256hex, str } from './util.js';
 import { carLive, learnPlaces, markTripsDirty, mergeTrips, rebuildTrips, relabelTrips, routePoints, splitTrip } from './tracks.js';
 import { newRecoveryCodes, newSecret, otpauthUrl, verifyTotp } from './totp.js';
 import { vapidKeys } from './webpush.js';
+import { audit } from './audit.js';
+import { listBackups, runBackup, backupDir } from './backup.js';
+import { currentSessionHash, sessionId } from './auth.js';
 import { WrongPassphrase, decryptFile } from './crypto-odcenc.js';
 import { indexerState, indexStats, mlHealth, resetIndex, runIndexer, visualSearch } from './search.js';
 import {
@@ -46,7 +49,8 @@ export function registerWebRoutes(router, app) {
     validatePassword(b.password);
     const r = db.run('INSERT INTO users(username, password_hash, is_admin, created_at) VALUES (?, ?, 1, ?)',
       username, hashPassword(b.password), now());
-    const token = createSession(db, Number(r.lastInsertRowid));
+    const token = createSession(db, Number(r.lastInsertRowid), ctx);
+    audit(db, { user: { id: Number(r.lastInsertRowid), username }, action: 'setup', ip: ctx.ip });
     send(ctx.res, 201, { ok: true }, { 'Set-Cookie': sessionCookie(token, secure(ctx)) });
   });
 
@@ -56,6 +60,7 @@ export function registerWebRoutes(router, app) {
     const user = db.get('SELECT * FROM users WHERE username = ?', String(b.username || '').trim());
     if (!user || !verifyPassword(String(b.password || ''), user.password_hash)) {
       recordLoginFailure(ctx.ip);
+      audit(db, { user: user ? { id: user.id, username: user.username } : null, action: 'sign-in failed', target: String(b.username || '').slice(0, 60), ip: ctx.ip, detail: 'wrong password' });
       throw new HttpError(401, 'Wrong username or password.');
     }
     if (user.totp_enabled) {
@@ -69,14 +74,18 @@ export function registerWebRoutes(router, app) {
       }
       if (!ok) {
         recordLoginFailure(ctx.ip);
+        audit(db, { user: { id: user.id, username: user.username }, action: 'sign-in failed', ip: ctx.ip, detail: 'wrong 2FA code' });
         throw new HttpError(401, 'That code is wrong or expired.', { totpRequired: true });
       }
     }
-    const token = createSession(db, user.id);
+    const token = createSession(db, user.id, ctx);
+    audit(db, { user: { id: user.id, username: user.username }, action: 'sign-in', ip: ctx.ip, detail: String(ctx.req.headers['user-agent'] || '').slice(0, 200) });
     send(ctx.res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(token, secure(ctx)) });
   });
 
   router.add('POST', '/api/logout', (ctx) => {
+    const u = userFromRequest(db, ctx.req);
+    if (u) audit(db, { user: u, action: 'sign-out', ip: ctx.ip });
     destroySession(db, ctx.req);
     send(ctx.res, 200, { ok: true }, { 'Set-Cookie': clearCookie() });
   });
@@ -94,7 +103,76 @@ export function registerWebRoutes(router, app) {
     if (!verifyPassword(String(b.current || ''), row.password_hash)) throw new HttpError(400, 'Current password is wrong.');
     validatePassword(b.password);
     db.run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(b.password), u.id);
+    // Sign out everywhere else.
+    db.run('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?', u.id, currentSessionHash(ctx.req) || '');
+    audit(db, { user: u, action: 'password changed', ip: ctx.ip });
     send(ctx.res, 200, { ok: true });
+  });
+
+  // ---------------------------------------------------------------- signed-in devices
+
+  router.add('GET', '/api/me/sessions', (ctx) => {
+    const u = requireUser(ctx);
+    const cur = currentSessionHash(ctx.req);
+    send(ctx.res, 200, db.all('SELECT token_hash, created_at, last_used_at, user_agent, ip FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY last_used_at DESC', u.id, now())
+      .map((s) => ({ id: sessionId(s.token_hash), createdAt: s.created_at, lastUsedAt: s.last_used_at, userAgent: s.user_agent, ip: s.ip, current: s.token_hash === cur })));
+  });
+
+  router.add('DELETE', '/api/me/sessions/:id', (ctx) => {
+    const u = requireUser(ctx);
+    const row = db.all('SELECT token_hash FROM sessions WHERE user_id = ?', u.id).find((s) => sessionId(s.token_hash) === ctx.params.id);
+    if (!row) throw new HttpError(404, 'Session not found');
+    db.run('DELETE FROM sessions WHERE token_hash = ?', row.token_hash);
+    audit(db, { user: u, action: 'signed out a device', target: ctx.params.id, ip: ctx.ip });
+    send(ctx.res, 200, { ok: true });
+  });
+
+  router.add('POST', '/api/me/sessions/sign-out-others', (ctx) => {
+    const u = requireUser(ctx);
+    const r = db.run('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?', u.id, currentSessionHash(ctx.req) || '');
+    audit(db, { user: u, action: 'signed out other devices', ip: ctx.ip, detail: `${r.changes} sessions` });
+    send(ctx.res, 200, { ok: true, signedOut: r.changes });
+  });
+
+  // ---------------------------------------------------------------- audit log and backups (admin)
+
+  router.add('GET', '/api/audit', (ctx) => {
+    const u = requireUser(ctx);
+    const q = ctx.query;
+    const where = [];
+    const params = [];
+    if (!u.isAdmin) { where.push('user_id = ?'); params.push(u.id); }
+    else if (q.get('user')) { where.push('username = ?'); params.push(q.get('user')); }
+    if (q.get('action')) { where.push('action LIKE ?'); params.push(`%${q.get('action')}%`); }
+    if (q.get('before')) { where.push('id < ?'); params.push(Number(q.get('before'))); }
+    const rows = db.all(`SELECT * FROM audit ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ?`,
+      ...params, Math.min(500, Number(q.get('limit')) || 200));
+    send(ctx.res, 200, rows.map((r) => ({ id: r.id, t: r.t, user: r.username, action: r.action, target: r.target, ip: r.ip, detail: r.detail })));
+  });
+
+  router.add('GET', '/api/tls', (ctx) => {
+    requireAdmin(ctx);
+    send(ctx.res, 200, { fingerprint: app.tls.fingerprint, httpsPort: config.httpsPort, secure: !!ctx.req.socket.encrypted || ctx.req.headers['x-forwarded-proto'] === 'https' });
+  });
+
+  router.add('GET', '/api/backups', (ctx) => {
+    requireAdmin(ctx);
+    send(ctx.res, 200, listBackups(config.dataDir));
+  });
+
+  router.add('POST', '/api/backups', (ctx) => {
+    const u = requireAdmin(ctx);
+    const name = runBackup(db, config.dataDir);
+    audit(db, { user: u, action: 'backup created', target: name, ip: ctx.ip });
+    send(ctx.res, 201, { name, backups: listBackups(config.dataDir) });
+  });
+
+  router.add('GET', '/api/backups/:name', (ctx) => {
+    const u = requireAdmin(ctx);
+    const name = ctx.params.name;
+    if (!/^odc-[\d-]+\.db$/.test(name)) throw new HttpError(400, 'Invalid name');
+    audit(db, { user: u, action: 'backup downloaded', target: name, ip: ctx.ip });
+    serveFile(ctx, path.join(backupDir(config.dataDir), name), 'application/octet-stream', { 'Content-Disposition': `attachment; filename="${name}"` });
   });
 
   // ---------------------------------------------------------------- two-factor sign-in
@@ -117,6 +195,7 @@ export function registerWebRoutes(router, app) {
       db.run('DELETE FROM recovery_codes WHERE user_id = ?', u.id);
       for (const c of codes) db.run('INSERT INTO recovery_codes(user_id, code_hash) VALUES (?, ?)', u.id, sha256hex(c));
     });
+    audit(db, { user: u, action: '2FA turned on', ip: ctx.ip });
     send(ctx.res, 200, { recoveryCodes: codes });
   });
 
@@ -127,6 +206,7 @@ export function registerWebRoutes(router, app) {
     if (!verifyPassword(String(b.password || ''), row.password_hash)) throw new HttpError(400, 'Password is wrong.');
     db.run('UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?', u.id);
     db.run('DELETE FROM recovery_codes WHERE user_id = ?', u.id);
+    audit(db, { user: u, action: '2FA turned off', ip: ctx.ip });
     send(ctx.res, 200, { ok: true });
   });
 
@@ -159,6 +239,8 @@ export function registerWebRoutes(router, app) {
     const before = prev.commuteLearning;
     saveSettings(db, await readJson(ctx.req));
     const after = getSettings(db);
+    const changed = Object.keys(after).filter((k) => JSON.stringify(after[k]) !== JSON.stringify(prev[k]) && k !== 'ntfyToken');
+    if (changed.length) audit(db, { user: userFromRequest(db, ctx.req), action: 'server settings changed', ip: ctx.ip, detail: changed.map((k) => `${k}: ${JSON.stringify(prev[k])} → ${JSON.stringify(after[k])}`).join('; ') });
     if (after.smartSearch && (!prev.smartSearch || prev.mlUrl !== after.mlUrl)) app.analyzeNow?.();
     if (!after.plateSearch && after.plateLog) saveSettings(db, { plateLog: false }); // the log needs plate reading
     if (after.plateSearch) {
@@ -213,6 +295,7 @@ export function registerWebRoutes(router, app) {
     if (db.get('SELECT id FROM users WHERE username = ?', username)) throw new HttpError(409, 'That username is taken.');
     db.run('INSERT INTO users(username, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?)',
       username, hashPassword(b.password), b.isAdmin ? 1 : 0, now());
+    audit(db, { user: userFromRequest(db, ctx.req), action: 'person added', target: username, ip: ctx.ip, detail: b.isAdmin ? 'admin' : null });
     send(ctx.res, 201, { ok: true });
   });
 
@@ -220,11 +303,16 @@ export function registerWebRoutes(router, app) {
     const me = requireAdmin(ctx);
     const id = Number(ctx.params.id);
     const b = await readJson(ctx.req);
+    const target = db.get('SELECT username FROM users WHERE id = ?', id)?.username;
     if (b.password !== undefined) {
       validatePassword(b.password);
       db.run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(b.password), id);
       db.run('DELETE FROM sessions WHERE user_id = ?', id);
+      audit(db, { user: me, action: 'password reset by admin', target, ip: ctx.ip });
     }
+    if (b.isAdmin !== undefined) audit(db, { user: me, action: b.isAdmin ? 'made admin' : 'removed admin', target, ip: ctx.ip });
+    if (b.resetTotp) audit(db, { user: me, action: '2FA reset by admin', target, ip: ctx.ip });
+    if (b.quotaGb !== undefined) audit(db, { user: me, action: 'storage limit changed', target, ip: ctx.ip, detail: String(b.quotaGb) });
     if (b.quotaGb !== undefined) {
       const v = b.quotaGb === null || b.quotaGb === '' || Number(b.quotaGb) <= 0 ? null : Number(b.quotaGb);
       db.run('UPDATE users SET quota_gb = ? WHERE id = ?', v, id);
@@ -247,6 +335,7 @@ export function registerWebRoutes(router, app) {
     if (id === me.id) throw new HttpError(400, "You can't delete your own account.");
     const owned = db.get('SELECT COUNT(*) n FROM cars WHERE owner_id = ?', id).n;
     if (owned > 0) throw new HttpError(409, 'This user still owns cars. Delete or reassign them first.');
+    audit(db, { user: me, action: 'person deleted', target: db.get('SELECT username FROM users WHERE id = ?', id)?.username, ip: ctx.ip });
     db.run('DELETE FROM users WHERE id = ?', id);
     send(ctx.res, 200, { ok: true });
   });
@@ -285,6 +374,7 @@ export function registerWebRoutes(router, app) {
     const name = str(b.name, 60)?.trim();
     if (!name) throw new HttpError(400, 'Give the car a name.');
     const r = db.run('INSERT INTO cars(owner_id, name, created_at) VALUES (?, ?, ?)', u.id, name, now());
+    audit(db, { user: u, action: 'car added', target: name, ip: ctx.ip });
     send(ctx.res, 201, carView(db.get('SELECT * FROM cars WHERE id = ?', Number(r.lastInsertRowid)), u));
   });
 
@@ -321,6 +411,7 @@ export function registerWebRoutes(router, app) {
     const id = Number(ctx.params.id);
     if (requireCarRole(db, u, id) !== 'owner') throw new HttpError(403, 'Only the owner can delete a car.');
     if (ctx.query.get('confirm') !== 'delete-footage') throw new HttpError(400, 'Confirmation required.');
+    audit(db, { user: u, action: 'car deleted with its footage', target: db.get('SELECT name FROM cars WHERE id = ?', id)?.name, ip: ctx.ip });
     for (const c of db.all('SELECT id, path FROM clips WHERE car_id = ?', id)) app.deleteClipFiles(c);
     db.run('DELETE FROM points WHERE car_id = ?', id);
     db.run('DELETE FROM live WHERE car_id = ?', id);
@@ -340,6 +431,7 @@ export function registerWebRoutes(router, app) {
     const role = b.role === 'manager' ? 'manager' : 'viewer';
     db.run('INSERT INTO car_shares(car_id, user_id, role) VALUES (?, ?, ?) ON CONFLICT(car_id, user_id) DO UPDATE SET role = excluded.role',
       id, target.id, role);
+    audit(db, { user: u, action: 'car shared', target: `${db.get('SELECT name FROM cars WHERE id = ?', id)?.name} → ${b.username}`, ip: ctx.ip, detail: role });
     send(ctx.res, 200, { ok: true });
   });
 
@@ -348,6 +440,7 @@ export function registerWebRoutes(router, app) {
     const id = Number(ctx.params.id);
     if (requireCarRole(db, u, id) !== 'owner') throw new HttpError(403, 'Only the owner can change sharing.');
     db.run('DELETE FROM car_shares WHERE car_id = ? AND user_id = ?', id, Number(ctx.params.userId));
+    audit(db, { user: u, action: 'car unshared', target: `${db.get('SELECT name FROM cars WHERE id = ?', id)?.name} → ${db.get('SELECT username FROM users WHERE id = ?', Number(ctx.params.userId))?.username}`, ip: ctx.ip });
     send(ctx.res, 200, { ok: true });
   });
 
@@ -363,7 +456,10 @@ export function registerWebRoutes(router, app) {
     db.run('INSERT INTO pairing_codes(code_hash, car_id, label, created_by, expires_at) VALUES (?, ?, ?, ?, ?)',
       sha256hex(code), id, str(b.label, 40) || 'Camera', u.id, expiresAt);
     const url = app.publicUrl(ctx.req);
-    send(ctx.res, 201, { code, expiresAt, url, qr: JSON.stringify({ odc: 1, url, code }) });
+    const home = getSettings(db).homeUrl.replace(/\/$/, '') || null;
+    const fp = app.tls.fingerprint;
+    audit(db, { user: u, action: 'pairing code created', target: db.get('SELECT name FROM cars WHERE id = ?', id)?.name, ip: ctx.ip });
+    send(ctx.res, 201, { code, expiresAt, url, homeUrl: home, fingerprint: fp, qr: JSON.stringify({ odc: 1, url, code, ...(home ? { home } : {}), fp }) });
   });
 
   const cameraWithRole = (u, cameraId, manage) => {
@@ -386,6 +482,7 @@ export function registerWebRoutes(router, app) {
     const u = requireUser(ctx);
     const cam = cameraWithRole(u, ctx.params.id, true);
     db.run('UPDATE cameras SET token_hash = ? WHERE id = ?', 'revoked:' + cam.id + ':' + now(), cam.id);
+    audit(db, { user: u, action: 'phone disconnected', target: cam.label, ip: ctx.ip });
     db.run('DELETE FROM live WHERE camera_id = ?', cam.id);
     send(ctx.res, 200, { ok: true });
   });
@@ -460,6 +557,7 @@ export function registerWebRoutes(router, app) {
     const c = clipFor(u, ctx.params.id, true);
     app.deleteClipFiles(c);
     db.run('DELETE FROM clips WHERE id = ?', c.id);
+    audit(db, { user: u, action: 'clip deleted', target: `${c.car_name} · ${c.file_name}`, ip: ctx.ip });
     send(ctx.res, 200, { ok: true });
   });
 
@@ -657,6 +755,7 @@ export function registerWebRoutes(router, app) {
       }
     }
     fs.utimesSync(out, new Date(), new Date());
+    audit(db, { user: u, action: 'encrypted clip opened', target: `${c.car_name} · ${c.file_name}`, ip: ctx.ip });
     send(ctx.res, 200, { ok: true, streamUrl: `/api/clips/${c.id}/stream?decrypted=1` });
   });
 
@@ -798,6 +897,7 @@ export function registerWebRoutes(router, app) {
     let plates = [];
     if (getSettings(db).plateSearch && /[0-9A-Za-z]/.test(text) && text.replace(/[^0-9A-Za-z]/g, '').length <= 10) {
       const byId = new Map(candidates.map((c) => [c.id, c]));
+      audit(db, { user: u, action: 'plate search', target: text, ip: ctx.ip });
       plates = searchPlates(db, text, candidates.map((c) => c.id)).slice(0, limit)
         .map((r) => ({ ...clipView(byId.get(r.id)), plate: r.plate, plateConfidence: r.confidence, plateMatch: r.match, offsetMs: r.offsetMs }));
     }
@@ -817,14 +917,16 @@ export function registerWebRoutes(router, app) {
 
   router.add('GET', '/api/plates', (ctx) => {
     const u = requirePlateLog(ctx);
+    audit(db, { user: u, action: 'plate log viewed', ip: ctx.ip, detail: ctx.query.get('q') ? `filter: ${ctx.query.get('q')}` : null });
     send(ctx.res, 200, plateLog(db, plateCars(u), {
       q: ctx.query.get('q') || '', sort: ctx.query.get('sort') || 'recent', limit: Math.min(1000, Number(ctx.query.get('limit')) || 300), userId: u.id,
     }));
   });
 
   router.add('POST', '/api/plates/erase', (ctx) => {
-    requireAdmin(ctx);
+    const admin = requireAdmin(ctx);
     erasePlates(db);
+    audit(db, { user: admin, action: 'all plate data deleted', ip: ctx.ip });
     send(ctx.res, 200, { ok: true });
   });
 
@@ -839,6 +941,7 @@ export function registerWebRoutes(router, app) {
       FROM plate_reads r JOIN clips c ON c.id = r.clip_id JOIN cars k ON k.id = r.car_id JOIN cameras m ON m.id = c.camera_id
       WHERE r.plate = ? AND r.car_id IN (${ph}) ORDER BY r.t DESC LIMIT 1000`, plate, ...cars);
     if (!reads.length) throw new HttpError(404, 'No sightings of that plate.');
+    audit(db, { user: u, action: 'plate viewed', target: plate, ip: ctx.ip });
     const note = db.get('SELECT note FROM plate_notes WHERE user_id = ? AND plate = ?', u.id, plate)?.note || null;
     send(ctx.res, 200, { plate, note, reads: reads.map((r) => ({ ...r, corrected: !!r.corrected })), similar: similarPlates(db, cars, plate) });
   });
@@ -862,6 +965,7 @@ export function registerWebRoutes(router, app) {
     const cars = plateCars(u, true);
     if (!cars.length) throw new HttpError(403, 'You can view these cars but not change them.');
     mergePlates(db, cars, from, into);
+    audit(db, { user: u, action: 'plates merged', target: `${from} → ${into}`, ip: ctx.ip });
     send(ctx.res, 200, { plate: into });
   });
 
@@ -878,6 +982,7 @@ export function registerWebRoutes(router, app) {
     const plate = normalizePlate((await readJson(ctx.req)).plate);
     if (plate.length < 2) throw new HttpError(400, 'Enter the plate as it should read.');
     db.run('UPDATE plate_reads SET plate = ?, corrected = 1 WHERE id = ?', plate, r.id);
+    audit(db, { user: u, action: 'plate reading corrected', target: `${r.plate} → ${plate}`, ip: ctx.ip });
     send(ctx.res, 200, { ok: true, plate });
   });
 
@@ -886,6 +991,7 @@ export function registerWebRoutes(router, app) {
     const u = requirePlateLog(ctx);
     const r = readFor(u, ctx.params.id, true);
     db.run('DELETE FROM plate_reads WHERE id = ?', r.id);
+    audit(db, { user: u, action: 'plate reading removed', target: r.plate, ip: ctx.ip });
     send(ctx.res, 200, { ok: true });
   });
 

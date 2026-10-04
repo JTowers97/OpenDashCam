@@ -25,15 +25,13 @@ object ServerReporter {
     @Volatile var lastError: String? = null
         private set
 
-    private fun client(settings: OdcSettings): ServerClient? =
-        if (settings.serverPaired) ServerClient(settings.serverUrl, settings.serverToken) else null
-
     private fun submit(context: Context, block: (ServerClient) -> Unit) {
         val settings = OdcSettings(context)
-        val c = client(settings) ?: return
+        if (!settings.serverPaired) return
+        val app = context.applicationContext
         executor.execute {
             try {
-                block(c)
+                block(ServerClient.forSettings(app, settings))
                 lastContactAt = System.currentTimeMillis()
                 lastError = null
             } catch (e: ServerException) {

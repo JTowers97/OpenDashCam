@@ -13,7 +13,7 @@ class ServerException(val status: Int, message: String) : Exception(message)
  * Talks to the ODC Server's phone API (/api/v1). Plain HttpURLConnection, no extra libraries.
  * Uploads are resumable: the server keeps partial uploads and reports how much it already has.
  */
-class ServerClient(baseUrl: String, private val token: String?) {
+class ServerClient(baseUrl: String, private val token: String?, private val pin: String? = null) {
     private val base = baseUrl.trim().trimEnd('/')
 
     data class Pairing(val token: String, val cameraId: String, val carName: String, val label: String, val serverName: String)
@@ -148,6 +148,7 @@ class ServerClient(baseUrl: String, private val token: String?) {
         c.connectTimeout = 15_000
         c.readTimeout = 120_000
         c.useCaches = false
+        ServerConnection.applyPin(c, pin)
         token?.let { c.setRequestProperty("Authorization", "Bearer $it") }
         c.setRequestProperty("Accept", "application/json")
         return c
@@ -156,12 +157,19 @@ class ServerClient(baseUrl: String, private val token: String?) {
     companion object {
         private const val CHUNK = 4 * 1024 * 1024
 
-        /** Reads a QR payload: {"odc":1,"url":"https://...","code":"ABCD2345"}. */
-        fun parseQr(text: String): Pair<String, String>? = try {
+        data class QrPayload(val url: String, val code: String, val homeUrl: String?, val fingerprint: String?)
+
+        /** Reads a QR payload: {"odc":1,"url":"https://...","code":"ABCD2345","home":"https://192.168.1.50:8443","fp":"..."}. */
+        fun parseQr(text: String): QrPayload? = try {
             val o = JSONObject(text)
-            if (o.optInt("odc") == 1) o.getString("url") to o.getString("code") else null
+            if (o.optInt("odc") != 1) null
+            else QrPayload(o.getString("url"), o.getString("code"), o.optString("home").ifBlank { null }, o.optString("fp").ifBlank { null })
         } catch (e: Exception) {
             null
         }
+
+        /** A client for the paired server, at its home address when reachable. Does network I/O; call off the main thread. */
+        fun forSettings(context: android.content.Context, settings: org.opendashcam.settings.OdcSettings): ServerClient =
+            ServerClient(ServerConnection.baseUrl(context, settings), settings.serverToken, settings.serverCertPin.ifBlank { null })
     }
 }

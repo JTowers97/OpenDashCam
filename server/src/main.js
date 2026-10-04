@@ -1,4 +1,5 @@
 import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
@@ -12,16 +13,22 @@ import { learnPlaces, rebuildDirtyTrips, relabelTrips } from './tracks.js';
 import { loadGeocoder, placeName } from './geocode.js';
 import { forgetClip, runIndexer } from './search.js';
 import { purgeOldPlates, runPlateIndexer } from './plates.js';
+import { loadTls } from './tls.js';
+import { httpsRedirect, securityHeaders } from './headers.js';
+import { maybeBackup } from './backup.js';
+import { purgeAudit } from './audit.js';
 import { notify } from './notify.js';
 
 for (const d of [config.dataDir, config.libraryDir, config.uploadsDir, config.cacheDir]) fs.mkdirSync(d, { recursive: true });
 
 const db = openDb(config.dbPath);
+const tls = loadTls(config.dataDir);
 const jobs = new JobQueue(1);        // thumbnails and probing
 const transcodes = new JobQueue(1);  // H.264 conversions
 
 const app = {
   db,
+  tls,
 
   /** The address phones should use, e.g. https://opendashcam.example.com */
   publicUrl(req) {
@@ -204,6 +211,11 @@ app.analyzeNow = () => { analyzeLoop(); };
 every(Number(process.env.ODC_INDEX_INTERVAL_MS) || 30_000, analyzeLoop);
 every(3600_000, () => { enforceRetention(); cleanUploads(); learnAllPlaces(); purgeOldPlates(db); });
 every(10 * 60_000, cleanDecrypted);
+every(3600_000, () => {
+  purgeAudit(db, getSettings(db).auditRetentionDays);
+  const b = maybeBackup(db, config.dataDir);
+  if (b) console.log('Database backup written:', b);
+});
 
 // Finish processing for clips that arrived before a restart.
 for (const c of db.all('SELECT id FROM clips WHERE has_thumb = 0 AND encrypted = 0 ORDER BY started_at DESC LIMIT 200')) app.onClipAdded(c.id);
@@ -253,8 +265,11 @@ function serveStatic(req, res, pathname) {
   fs.createReadStream(file).pipe(res);
 }
 
-const server = http.createServer(async (req, res) => {
+async function handle(req, res) {
   const url = new URL(req.url, 'http://local');
+  const secure = !!req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https';
+  securityHeaders(db, req, res, secure);
+  if (httpsRedirect(db, req, res, secure, config.httpsPort)) return;
   const ip = config.trustProxy ? (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress : req.socket.remoteAddress;
   try {
     if (!url.pathname.startsWith('/api/')) return serveStatic(req, res, url.pathname);
@@ -271,6 +286,14 @@ const server = http.createServer(async (req, res) => {
     if (!res.headersSent) send(res, status, { error: status === 500 ? 'Server error' : e.message, ...(e.extra || {}) });
     else res.destroy();
   }
+}
+
+const server = http.createServer(handle);
+// Built-in HTTPS on its own port, with the server's own certificate (see tls.js).
+const secureServer = https.createServer({ key: tls.key, cert: tls.cert }, handle);
+secureServer.requestTimeout = 0;
+secureServer.listen(config.httpsPort, () => {
+  console.log(`HTTPS on port ${config.httpsPort} (certificate fingerprint ${tls.fingerprint})`);
 });
 
 server.requestTimeout = 0; // large uploads
@@ -278,6 +301,6 @@ server.listen(config.port, () => {
   console.log(`Open Dash Cam server ${config.version} listening on port ${config.port} (data: ${config.dataDir})`);
 });
 
-const shutdown = () => server.close(() => process.exit(0));
+const shutdown = () => { secureServer.close(); server.close(() => process.exit(0)); };
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

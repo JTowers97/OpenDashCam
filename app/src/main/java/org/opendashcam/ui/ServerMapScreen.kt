@@ -79,7 +79,7 @@ fun ServerMapScreen(settings: OdcSettings, onBack: () -> Unit, onOpenSync: (Long
     LaunchedEffect(Unit) {
         val result = withContext(Dispatchers.IO) {
             try {
-                val arr = ServerClient(settings.serverUrl, settings.serverToken).locatedClips(1000)
+                val arr = ServerClient.forSettings(context, settings).locatedClips(1000)
                 Result.success((0 until arr.length()).map { arr.getJSONObject(it) })
             } catch (e: Exception) {
                 Result.failure(e)

@@ -113,6 +113,12 @@ class OdcSettings(context: Context) {
     var serverCameraLabel by string("server_camera_label", "")
     var serverUploadEnabled by bool("server_upload", true)
     var serverLiveEnabled by bool("server_live", true)
+    /** Optional server address on the home network, used automatically when reachable. */
+    var serverHomeUrl by string("server_home_url", "")
+    /** SHA-256 fingerprint (base64url) of the server's own certificate, trusted for its HTTPS addresses. */
+    var serverCertPin by string("server_cert_pin", "")
+    /** Result of the last SMB check: "yes", "no" or "" (unknown). */
+    var smbEncrypted by string("smb_encrypted", "")
 
     // Tracking-only mode (needs a paired ODC Server)
     var trackingEnabled by bool("tracking_enabled", false)
@@ -187,6 +193,8 @@ class OdcSettings(context: Context) {
 
     fun clearServer() {
         trackingEnabled = false
+        serverHomeUrl = ""
+        serverCertPin = ""
         serverToken = null
         serverUrl = ""
         serverCameraId = ""

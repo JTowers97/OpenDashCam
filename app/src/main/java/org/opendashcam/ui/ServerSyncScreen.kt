@@ -60,6 +60,7 @@ private class Panel(val cameraId: String, val label: String, val clips: List<Syn
 /** All of this car's cameras from the ODC Server, played together on one clock. Needs a connection. */
 @Composable
 fun ServerSyncScreen(settings: OdcSettings, from: Long, onBack: () -> Unit, modifier: Modifier = Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val to = from + 20 * 60_000L
     var panels by remember { mutableStateOf<List<Panel>?>(null) }
     var route by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
@@ -70,7 +71,7 @@ fun ServerSyncScreen(settings: OdcSettings, from: Long, onBack: () -> Unit, modi
 
     LaunchedEffect(Unit) {
         val r = withContext(Dispatchers.IO) {
-            try { Result.success(ServerClient(settings.serverUrl, settings.serverToken).sync(from, to)) } catch (e: Exception) { Result.failure(e) }
+            try { Result.success(ServerClient.forSettings(context, settings).sync(from, to)) } catch (e: Exception) { Result.failure(e) }
         }
         r.onFailure { error = "Can't reach the server: ${it.message ?: it.javaClass.simpleName}" }
         r.onSuccess { data ->

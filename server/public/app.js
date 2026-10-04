@@ -270,7 +270,11 @@ async function pairingPanel(carId, label) {
   return h('div', { class: 'stack', style: 'text-align:center' },
     h('div', { class: 'qr', html: qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true }) }),
     h('div', {}, h('div', { class: 'muted small' }, 'Or enter the code by hand:'), h('div', { class: 'code' }, data.code.replace(/(.{4})/, '$1 '))),
-    h('div', { class: 'muted small' }, `Server address: ${data.url}`), left);
+    h('div', { class: 'muted small' }, `Server address: ${data.url}` + (data.homeUrl ? ` · at home: ${data.homeUrl}` : '')),
+    data.url.startsWith('http://') && !/^http:\/\/(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(data.url)
+      ? h('div', { class: 'small', style: 'color:var(--warn)' }, '⚠ This address isn’t encrypted (http://) and isn’t on your home network. Phones will send footage and location unencrypted over the internet. We recommend HTTPS.')
+      : null,
+    left);
 }
 
 // ---------------------------------------------------------------- timeline
@@ -1170,6 +1174,23 @@ async function serverSettingsForm(onSaved) {
   showMismatch();
 
   const smartStatus = h('div', { class: 'stack' });
+  const tlsInfo = h('div', { class: 'muted small' });
+  api('GET', '/api/tls').then(({ data }) => {
+    tlsInfo.replaceChildren(
+      `Built-in HTTPS is on port ${data.httpsPort} inside the container (map it in docker-compose.yml to use it). Browsers will warn once about its certificate; phones trust it automatically after pairing, but the app’s video player needs a publicly trusted certificate: for that, use the optional automatic Let’s Encrypt setup described in the server README. Certificate fingerprint: `,
+      h('code', { style: 'word-break:break-all' }, data.fingerprint),
+      data.secure ? null : h('div', { style: 'color:var(--warn);margin-top:.35rem' }, '⚠ You’re using an unencrypted http:// connection. We recommend HTTPS, especially away from home.'));
+  }).catch(() => {});
+  const backupsBox = h('div', { class: 'stack' });
+  const refreshBackups = async () => {
+    const { data } = await api('GET', '/api/backups');
+    backupsBox.replaceChildren(
+      h('div', { class: 'muted small' }, data.length ? `${data.length} backups in /data/backups. Copy them somewhere else too: they’re on the same disk as the server.` : 'No backups yet.'),
+      ...data.map((b) => h('div', { class: 'row small' }, h('span', { class: 'grow' }, `${fmtDateTime(b.at)} · ${fmtBytes(b.size)}`),
+        h('a', { class: 'btn small', href: `/api/backups/${b.name}` }, 'Download'))),
+      h('button', { class: 'btn small', onclick: async () => { await api('POST', '/api/backups'); toast('Backup created.'); refreshBackups(); } }, 'Back up now'));
+  };
+  refreshBackups().catch(() => {});
 
   // Analyze existing footage (smart search and/or plates), with a scope.
   const anScope = h('select', {}, [['all', 'All footage'], ['range', 'A date range'], ['car', 'One car']].map(([v, l]) => h('option', { value: v }, l)));
@@ -1256,6 +1277,17 @@ async function serverSettingsForm(onSaved) {
     h('h2', {}, 'Server settings'),
     field('serverName', 'Server name'),
     h('label', { class: 'field' }, h('span', {}, 'Units'), units),
+    h('h3', {}, 'Security'),
+    field('homeUrl', 'Home network address (optional)', 'url', 'For example https://192.168.1.50:8443. Phones use it automatically when they’re on your home network, for faster uploads; it’s included in pairing QR codes.'),
+    h('label', { class: 'row' }, field('httpsOnly', '', 'checkbox').querySelector('input'),
+      'HTTPS only: send browsers that arrive over http:// to the secure address (phones are not affected)'),
+    tlsInfo,
+    field('auditRetentionDays', 'Keep the activity log for (days, 0 = forever)', 'number'),
+    h('h3', {}, 'Database backups'),
+    h('label', { class: 'row' }, field('backupEnabled', '', 'checkbox').querySelector('input'), 'Back up the database every day'),
+    field('backupHour', 'At this hour (0–23, server time)', 'number'),
+    field('backupKeep', 'Keep this many backups', 'number'),
+    backupsBox,
     h('h3', {}, 'Storage'),
     field('storageCapGb', 'Maximum footage size (GB, 0 = no limit)', 'number', 'When reached, the oldest unlocked clips are removed. You get an alert at 90%.'),
     field('retentionDays', 'Delete unlocked clips older than (days, 0 = keep forever)', 'number'),
@@ -1314,6 +1346,55 @@ async function serverSettingsForm(onSaved) {
     } catch (e) { err.textContent = e.message; }
   }
   return form;
+}
+
+async function devicesCard() {
+  const card = h('div', { class: 'card stack', style: 'max-width:640px;margin-top:1rem' }, h('h2', {}, 'Signed-in devices'));
+  const { data } = await api('GET', '/api/me/sessions');
+  const describe = (ua) => {
+    if (!ua) return 'Unknown device';
+    const browser = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+    const osName = /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac OS/.test(ua) ? 'macOS' : /Linux/.test(ua) ? 'Linux' : '';
+    return `${browser}${osName ? ' on ' + osName : ''}`;
+  };
+  card.append(h('p', { class: 'muted small' }, 'Browsers where your account is signed in. Phones connected to your cars are listed on the Cars page.'),
+    ...data.map((s) => h('div', { class: 'row' },
+      h('div', { class: 'grow' }, h('div', {}, describe(s.userAgent), s.current ? h('span', { class: 'badge ok', style: 'margin-left:.5rem' }, 'This device') : null),
+        h('div', { class: 'muted small' }, `Last active ${ago(s.lastUsedAt)} · signed in ${fmtDateTime(s.createdAt)}${s.ip ? ' · ' + s.ip : ''}`)),
+      s.current ? null : h('button', { class: 'btn small', onclick: async () => { await api('DELETE', `/api/me/sessions/${s.id}`); render(); } }, 'Sign out'))),
+    data.length > 1 ? h('button', { class: 'btn', onclick: async () => { const r = await api('POST', '/api/me/sessions/sign-out-others'); toast(`Signed out ${r.data.signedOut} other devices.`); render(); } }, 'Sign out all other devices') : null);
+  return card;
+}
+
+function auditCard() {
+  const card = h('div', { class: 'card stack', style: 'max-width:900px;margin-top:1rem' }, h('h2', {}, state.me.isAdmin ? 'Activity log' : 'Your activity'));
+  const filter = h('input', { type: 'text', placeholder: 'Filter by action, e.g. sign-in or plate' });
+  const userIn = state.me.isAdmin ? h('input', { type: 'text', placeholder: 'Person (username)' }) : null;
+  const table = h('div', { style: 'overflow-x:auto' });
+  let oldest = null;
+  const load = async (more) => {
+    const q = new URLSearchParams({ limit: 100 });
+    if (filter.value.trim()) q.set('action', filter.value.trim());
+    if (userIn?.value.trim()) q.set('user', userIn.value.trim());
+    if (more && oldest) q.set('before', oldest);
+    const { data } = await api('GET', `/api/audit?${q}`);
+    if (!more) table.replaceChildren(h('table', {}, h('tr', {}, ['When', 'Who', 'What', 'Details', 'From'].map((x) => h('th', {}, x)))));
+    const t = table.querySelector('table');
+    for (const e of data) {
+      t.append(h('tr', {}, h('td', { class: 'small' }, fmtDateTime(e.t)), h('td', {}, e.user || ''), h('td', {}, e.action),
+        h('td', { class: 'small muted' }, [e.target, e.detail].filter(Boolean).join(' · ')), h('td', { class: 'small muted' }, e.ip || '')));
+    }
+    oldest = data.length ? data[data.length - 1].id : oldest;
+    more_.style.display = data.length === 100 ? '' : 'none';
+  };
+  const more_ = h('button', { class: 'btn small', onclick: () => load(true) }, 'Load older');
+  card.append(h('p', { class: 'muted small' }, state.me.isAdmin
+      ? 'Sign-ins, sharing and account changes, settings changes, deletions, and every look at license plate data. Kept for a year (adjustable in the server’s settings).'
+      : 'Your sign-ins and the changes you’ve made.'),
+    h('form', { class: 'row', onsubmit: (e) => { e.preventDefault(); load(false); } }, filter, userIn, h('button', { class: 'btn small', type: 'submit' }, 'Filter')),
+    table, more_);
+  load(false).catch((e) => table.append(h('p', { class: 'error' }, e.message)));
+  return card;
 }
 
 function notificationsCard() {
@@ -1436,6 +1517,8 @@ async function pageSettings(main) {
       } }, 'Change password')));
 
   main.append(await twoFactorCard());
+  main.append(await devicesCard());
+  main.append(auditCard());
   main.append(notificationsCard());
 
   const { data: st } = await api('GET', '/api/storage');

@@ -208,6 +208,19 @@ CREATE TABLE IF NOT EXISTS push_subs (
   created_at INTEGER NOT NULL
 );
 
+-- Audit log: who did what, when, from where.
+CREATE TABLE IF NOT EXISTS audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  t INTEGER NOT NULL,
+  user_id INTEGER,
+  username TEXT,
+  action TEXT NOT NULL,
+  target TEXT,
+  ip TEXT,
+  detail TEXT
+);
+CREATE INDEX IF NOT EXISTS audit_t ON audit(t);
+
 CREATE TABLE IF NOT EXISTS recovery_codes (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   code_hash TEXT NOT NULL,
@@ -230,6 +243,9 @@ const COLUMNS = [
   ['cars', 'retention_days', 'INTEGER'],        // null = server default, 0 = keep forever
   ['cars', 'storage_cap_gb', 'REAL'],           // null = no per-car limit
   ['users', 'quota_gb', 'REAL'],                // null = no per-person limit (cars they own)
+  ['sessions', 'user_agent', 'TEXT'],
+  ['sessions', 'ip', 'TEXT'],
+  ['sessions', 'last_used_at', 'INTEGER'],
 ];
 
 export function openDb(dbPath) {
@@ -287,6 +303,12 @@ export const DEFAULT_SETTINGS = {
   smartSearch: false,
   mlUrl: process.env.ODC_ML_URL || 'http://opendashcam-ml:3003',
   searchFrameIntervalSec: 10,
+  homeUrl: process.env.ODC_HOME_URL || '',   // optional address on the home network, e.g. https://192.168.1.50:8443
+  httpsOnly: false,
+  backupEnabled: true,
+  backupHour: 3,
+  backupKeep: 7,
+  auditRetentionDays: 365,
   plateSearch: false,
   plateLog: false,
   plateRetentionDays: 30,

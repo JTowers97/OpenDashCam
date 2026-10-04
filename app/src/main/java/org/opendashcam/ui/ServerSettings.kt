@@ -59,15 +59,25 @@ fun ServerSection(settings: OdcSettings, onChanged: () -> Unit, onOpenServerClip
     var confirmUnpair by remember { mutableStateOf(false) }
     var checkResult by remember { mutableStateOf<String?>(null) }
 
-    fun pair(url: String, code: String, label: String?) {
+    fun pair(url: String, code: String, label: String?, home: String? = null, fp: String? = null) {
         busy = true
         error = null
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 try {
-                    val p = ServerClient(url, null).pair(code, label, "${Build.MANUFACTURER} ${Build.MODEL}", AppVersion.full)
+                    val p = ServerClient(url, null, fp).pair(code, label, "${Build.MANUFACTURER} ${Build.MODEL}", AppVersion.full)
                     settings.serverUrl = url.trim().trimEnd('/')
                     settings.serverToken = p.token
+                    settings.serverHomeUrl = home.orEmpty()
+                    settings.serverCertPin = fp.orEmpty()
+                    // Paired by hand: learn the home address and certificate from the server over this connection.
+                    try {
+                        val me = ServerClient(settings.serverUrl, p.token, fp).me()
+                        if (home == null) settings.serverHomeUrl = me.optString("homeUrl").takeIf { it.isNotBlank() && it != "null" }.orEmpty()
+                        if (fp == null) settings.serverCertPin = me.optString("certFingerprint")
+                    } catch (_: Exception) {
+                    }
+                    org.opendashcam.backup.ServerConnection.reset()
                     settings.serverCameraId = p.cameraId
                     settings.serverCarName = p.carName
                     settings.serverCameraLabel = p.label
@@ -93,7 +103,7 @@ fun ServerSection(settings: OdcSettings, onChanged: () -> Unit, onOpenServerClip
         if (parsed == null) {
             if (text != null) error = "That QR code isn't an ODC pairing code."
         } else {
-            pair(parsed.first, parsed.second, null)
+            pair(parsed.url, parsed.code, null, parsed.homeUrl, parsed.fingerprint)
         }
     }
 
@@ -118,11 +128,12 @@ fun ServerSection(settings: OdcSettings, onChanged: () -> Unit, onOpenServerClip
     } else {
         Text("Connected to ${settings.serverCarName} · ${settings.serverCameraLabel}", style = MaterialTheme.typography.bodyLarge)
         Hint(settings.serverUrl)
-        if (settings.serverUrl.startsWith("http://")) {
-            Text(
-                "This connection isn't encrypted. Fine on your home network; use an https:// address for access from elsewhere.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
-            )
+        if (settings.serverHomeUrl.isNotBlank()) Hint("At home: ${settings.serverHomeUrl} (used automatically on your home Wi-Fi)")
+        listOfNotNull(
+            org.opendashcam.backup.ServerConnection.warning(settings.serverUrl),
+            org.opendashcam.backup.ServerConnection.warning(settings.serverHomeUrl).takeIf { settings.serverHomeUrl.isNotBlank() },
+        ).distinct().forEach { w ->
+            Text("⚠ $w", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
         val last = ServerReporter.lastContactAt
         if (last > 0) Hint("Last contact: " + DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(last)))
@@ -149,8 +160,12 @@ fun ServerSection(settings: OdcSettings, onChanged: () -> Unit, onOpenServerClip
                 scope.launch {
                     checkResult = withContext(Dispatchers.IO) {
                         try {
-                            val me = ServerClient(settings.serverUrl, settings.serverToken).me()
-                            "✓ ${me.optString("serverName")} ${me.optString("serverVersion")} · ${me.optString("carName")} · ${me.optString("label")}"
+                            val client = ServerClient.forSettings(context, settings)
+                            val me = client.me()
+                            me.optString("certFingerprint").takeIf { it.isNotBlank() }?.let { settings.serverCertPin = it }
+                            me.optString("homeUrl").takeIf { it.isNotBlank() && it != "null" }?.let { settings.serverHomeUrl = it }
+                            "✓ ${me.optString("serverName")} ${me.optString("serverVersion")} · ${me.optString("carName")} · ${me.optString("label")} · via " +
+                                org.opendashcam.backup.ServerConnection.baseUrl(context, settings)
                         } catch (e: Exception) {
                             "✗ ${e.message ?: e.javaClass.simpleName}"
                         }

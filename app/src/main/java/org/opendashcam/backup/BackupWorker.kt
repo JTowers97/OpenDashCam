@@ -67,7 +67,7 @@ class BackupWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val storage = ClipStorage(ctx, settings)
         val day = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         var smb: SmbTarget? = null
-        val server = if (serverOn) ServerClient(settings.serverUrl, settings.serverToken) else null
+        val server = if (serverOn) ServerClient.forSettings(ctx, settings) else null
         var smbError: String? = null
         var serverError: String? = null
         val attempted = HashSet<String>()

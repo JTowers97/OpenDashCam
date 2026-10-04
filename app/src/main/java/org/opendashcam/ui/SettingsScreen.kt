@@ -460,6 +460,13 @@ fun SettingsScreen(
         )
         if (settings.smbEnabled) {
             SmbConfigEditor(settings, onSaved = { version++ })
+            if (settings.smbEncrypted == "no") {
+                Text(
+                    "⚠ Traffic to this share isn't encrypted, so footage crosses your network readable. We recommend turning on SMB encryption " +
+                        "for the share (for example \"Enable SMB encryption\" on Synology, or \"Encrypt data access\" in Windows share settings).",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                )
+            }
             SwitchRow(
                 title = "Encrypt SMB uploads",
                 checked = settings.encryptUploads,

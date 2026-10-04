@@ -80,8 +80,13 @@ fun SmbConfigEditor(settings: OdcSettings, onSaved: () -> Unit) {
                     scope.launch {
                         val msg = withContext(Dispatchers.IO) {
                             try {
-                                SmbTarget(settings.smbConfig).use { it.test() }
-                                "✓ Connected and able to write to the folder."
+                                val enc = SmbTarget(settings.smbConfig).use { it.test() }
+                                settings.smbEncrypted = when (enc) { true -> "yes"; false -> "no"; null -> "" }
+                                "✓ Connected and able to write to the folder. " + when (enc) {
+                                    true -> "Traffic to this share is encrypted."
+                                    false -> "⚠ Traffic to this share isn't encrypted. We recommend turning on SMB encryption for the share on your NAS or computer."
+                                    null -> "Couldn't tell whether traffic is encrypted; we recommend turning on SMB encryption for the share."
+                                }
                             } catch (e: Exception) {
                                 "✗ ${e.message ?: e.javaClass.simpleName}"
                             }

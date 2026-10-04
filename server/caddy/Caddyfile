@@ -1,0 +1,7 @@
+# Automatic HTTPS for the ODC Server with a free Let's Encrypt certificate.
+# Caddy gets the certificate on first start and renews it automatically before it expires.
+# Set ODC_DOMAIN in docker-compose.yml (e.g. odc.example.com); its DNS must point to your public IP,
+# and ports 80 and 443 must be forwarded to this machine.
+{$ODC_DOMAIN} {
+	reverse_proxy opendashcam:8080
+}

@@ -30,12 +30,21 @@ export function validatePassword(pw) {
   if (typeof pw !== 'string' || pw.length < 8) throw new HttpError(400, 'Passwords need at least 8 characters.');
 }
 
-export function createSession(db, userId) {
+export function createSession(db, userId, ctx = null) {
   const token = randomToken();
   const t = now();
-  db.run('INSERT INTO sessions(token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)',
-    sha256hex(token), userId, t, t + SESSION_DAYS * 86400_000);
+  db.run('INSERT INTO sessions(token_hash, user_id, created_at, expires_at, user_agent, ip, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    sha256hex(token), userId, t, t + SESSION_DAYS * 86400_000,
+    ctx ? String(ctx.req.headers['user-agent'] || '').slice(0, 300) : null, ctx?.ip ?? null, t);
   return token;
+}
+
+/** Short public id for a session (never the token itself). */
+export const sessionId = (tokenHash) => tokenHash.slice(0, 16);
+
+export function currentSessionHash(req) {
+  const token = parseCookies(req)[SESSION_COOKIE];
+  return token ? sha256hex(token) : null;
 }
 
 export function sessionCookie(token, secure) {
@@ -51,10 +60,13 @@ export function clearCookie() {
 export function userFromRequest(db, req) {
   const token = parseCookies(req)[SESSION_COOKIE];
   if (!token) return null;
+  const hash = sha256hex(token);
   const row = db.get(
-    `SELECT u.id, u.username, u.is_admin FROM sessions s JOIN users u ON u.id = s.user_id
-     WHERE s.token_hash = ? AND s.expires_at > ?`, sha256hex(token), now());
-  return row ? { id: row.id, username: row.username, isAdmin: row.is_admin === 1 } : null;
+    `SELECT u.id, u.username, u.is_admin, s.last_used_at FROM sessions s JOIN users u ON u.id = s.user_id
+     WHERE s.token_hash = ? AND s.expires_at > ?`, hash, now());
+  if (!row) return null;
+  if (!row.last_used_at || now() - row.last_used_at > 5 * 60_000) db.run('UPDATE sessions SET last_used_at = ? WHERE token_hash = ?', now(), hash);
+  return { id: row.id, username: row.username, isAdmin: row.is_admin === 1 };
 }
 
 export function destroySession(db, req) {

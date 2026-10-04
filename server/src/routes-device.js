@@ -9,6 +9,7 @@ import { getSettings } from './db.js';
 import { HttpError, now, num, randomToken, readBody, readJson, send, sha256hex, str, uuid, bool } from './util.js';
 import { insertPoints, parseGpx, recordLive, routePoints } from './tracks.js';
 import { placeName } from './geocode.js';
+import { audit } from './audit.js';
 import { notify } from './notify.js';
 
 const API_VERSIONS = [1];
@@ -45,6 +46,7 @@ export function registerDeviceRoutes(router, app) {
         sha256hex(token), now(), now());
     });
     const car = db.get('SELECT name FROM cars WHERE id = ?', row.car_id);
+    audit(db, { action: 'phone paired', target: `${car.name} · ${str(body.label, 40) || row.label}`, ip: ctx.ip, detail: str(body.deviceModel, 80) });
     send(ctx.res, 200, {
       token, cameraId: id, carId: row.car_id, carName: car.name, label: str(body.label, 40) || row.label,
       serverName: getSettings(db).serverName, apiVersions: API_VERSIONS,
@@ -58,6 +60,8 @@ export function registerDeviceRoutes(router, app) {
       cameraId: cam.id, carId: cam.car_id, carName: cam.car_name, label: cam.label,
       serverName: s.serverName, serverVersion: config.version, apiVersions: API_VERSIONS,
       units: s.units, liveIntervalSec: 5,
+      // Lets phones paired by hand learn the home address and the built-in certificate over this trusted connection.
+      homeUrl: s.homeUrl.replace(/\/$/, '') || null, certFingerprint: app.tls.fingerprint,
     });
   });
 

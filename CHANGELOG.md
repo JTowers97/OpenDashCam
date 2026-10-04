@@ -1,5 +1,17 @@
 # Changelog
 
+## App 1.0.0 · Server 1.0.0
+- **Server:** built-in HTTPS with its own certificate; pairing QR codes carry its fingerprint so phones trust exactly it
+- **Server:** optional automatic HTTPS with a free Let's Encrypt certificate (Caddy container, renewed
+  automatically); with it, video playback in the app works over HTTPS
+- **Server:** security headers, optional HTTPS-only mode, signed-in devices (sign out others; changing the
+  password signs out other devices), activity log, daily database backups with downloads
+- **App:** home address: uses the server's home-network address automatically on home Wi-Fi
+- **App:** trusts the server's own certificate (pinned), alongside regular certificates
+- **App:** warnings for unencrypted connections (http:// server addresses, SMB shares without encryption)
+- **Project:** Dependabot updates, a vulnerability scan of the server image, and CodeQL code scanning
+  (runs once the repository is public)
+
 ## App 0.9.1
 - Fixed: clips recorded with the 0.9.0 engine were rotated 90° and squashed. Recordings now use the camera
   image exactly as the sensor delivers it, as before 0.9.0

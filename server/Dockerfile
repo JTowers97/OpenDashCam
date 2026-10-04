@@ -22,7 +22,7 @@ ENV NODE_ENV=production \
     PORT=8080
 
 VOLUME /data
-EXPOSE 8080
+EXPOSE 8080 8443
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
   CMD wget -qO- http://127.0.0.1:8080/api/setup >/dev/null || exit 1

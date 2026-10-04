@@ -28,6 +28,11 @@ built-in database; an optional second container adds smart search.
   truth, or average them, with adjustable thresholds
 - **Alerts** via [ntfy](https://ntfy.sh): impacts, overheating, low phone storage, battery cutoff, a
   camera going offline, cameras disagreeing, server storage near its limit
+- **Security:** built-in HTTPS, security headers, optional HTTPS-only mode, a list of signed-in devices
+  (sign out others), and an activity log of sign-ins, sharing and account changes, settings changes,
+  deletions and every look at license plate data (admins see everyone's; others see their own)
+- **Database backups:** a daily copy of the database in `data/backups` (time and number kept are adjustable),
+  plus "Back up now" and downloads in Settings
 - **Retention** (off by default): maximum total footage size and/or maximum age for the server, per car
   (including "keep forever"), and a storage limit per person across the cars they own; locked clips
   are always kept
@@ -66,6 +71,44 @@ with your network set to *Private*):
 New-NetFirewallRule -DisplayName "Open Dash Cam" -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow -Profile Private
 ```
 A quick test: open `http://YOUR-IP:PORT` in the phone's browser. If the sign-in page loads, pairing will work.
+
+### Automatic HTTPS with Let's Encrypt (recommended for access away from home)
+The compose file includes an optional HTTPS container (Caddy) that gets a free, publicly trusted
+certificate from Let's Encrypt and renews it automatically. Browsers show no warnings, and video
+playback in the app works over HTTPS.
+
+You need:
+- a domain name (e.g. `odc.example.com`) whose DNS record points to your home's public IP address
+- ports **80 and 443** forwarded from your router to the machine running ODC (Let's Encrypt connects to
+  port 80 to confirm you control the domain)
+
+Then, in `docker-compose.yml`:
+1. In the `caddy` service, set `ODC_DOMAIN=odc.example.com` (your domain)
+2. In the `opendashcam` service, set `ODC_PUBLIC_URL=https://odc.example.com` and `ODC_TRUST_PROXY=1`
+3. Start with the `https` profile: `docker compose --profile https up -d --build`
+   (with smart search too: `--profile ml --profile https`, or `COMPOSE_PROFILES=ml,https` in a `.env` file)
+
+The certificate arrives within a minute or so of the first start; `docker logs opendashcam-https` shows
+progress. Re-pair phones (or use "Check connection" in the app) after changing `ODC_PUBLIC_URL`.
+
+If you can't forward ports 80 and 443 (some internet providers block them), Let's Encrypt can instead
+verify the domain through your DNS provider's API. Caddy supports this with a DNS add-on for your provider;
+see Caddy's documentation on the DNS challenge.
+
+### Built-in HTTPS
+The server also listens for HTTPS on port 8443 with its own certificate, created on first start (map the
+port in `docker-compose.yml`). Phones trust it automatically: the pairing QR code carries the certificate's
+fingerprint, so the app accepts exactly that certificate. Browsers show a one-time warning because the
+certificate isn't from a public authority, and the app's video playback can't use it (Android's video
+player only accepts publicly trusted certificates); use Let's Encrypt above for that. To use your own certificate, replace `data/tls/cert.pem` and
+`data/tls/key.pem` and restart. The fingerprint is shown in Settings → Security and in the server log.
+
+**Home address:** set `ODC_HOME_URL` (or Settings → Security) to the server's address on your home network,
+e.g. `https://192.168.1.50:8443`. Phones on your home Wi-Fi use it automatically for faster uploads.
+
+**Unencrypted http://** addresses work, but the app and web app warn about them. We recommend HTTPS,
+especially for access away from home. **HTTPS-only mode** (Settings → Security) sends browsers that arrive
+over http:// to the secure address and enables HSTS; phones are not redirected.
 
 ### Access from anywhere
 Put the server behind HTTPS before exposing it to the internet, set `ODC_PUBLIC_URL` to that address
@@ -145,7 +188,12 @@ Everything lives in the `./data` folder you mapped to `/data`:
 - `library/<car>/<camera>/<date>/`: original clips plus their `.gpx` / `.srt` files
 - `cache/`: thumbnails and H.264 copies (safe to delete; they're recreated)
 
-Back up `./data` (stop the container first, or back up `odc.db` together with `odc.db-wal`).
+The server writes a daily copy of the database to `data/backups` (Settings → Database backups). Copy that
+folder to another disk too. Footage isn't in these backups; back up `data/library` separately if you want
+a second copy of it.
+
+**Restoring a database backup:** stop the container, copy the backup over `data/odc.db`, delete
+`data/odc.db-wal` and `data/odc.db-shm` if present, and start the container again.
 
 ## Development
 

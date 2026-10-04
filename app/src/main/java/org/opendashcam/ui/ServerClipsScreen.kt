@@ -86,7 +86,7 @@ fun ServerClipsScreen(settings: OdcSettings, onBack: () -> Unit, onOpenSync: (Lo
         error = null
         val result = withContext(Dispatchers.IO) {
             try {
-                val arr = ServerClient(settings.serverUrl, settings.serverToken).clips(limit = 200)
+                val arr = ServerClient.forSettings(context, settings).clips(limit = 200)
                 Result.success((0 until arr.length()).map { arr.getJSONObject(it) })
             } catch (e: Exception) {
                 Result.failure(e)

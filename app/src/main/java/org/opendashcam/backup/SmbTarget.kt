@@ -50,8 +50,29 @@ class SmbTarget(private val config: SmbConfig) : Closeable {
             ?: throw IllegalStateException("\"${config.share}\" is not a file share")
     }
 
-    /** Connects, creates the folder, writes and deletes a small test file. */
-    fun test() {
+    /**
+     * Whether traffic is encrypted (SMB 3 encryption, required by the session or the share), or null if it
+     * can't be determined. Looked up by name so it works across library versions.
+     */
+    fun encrypted(): Boolean? {
+        fun flag(obj: Any?, vararg path: String): Boolean? = try {
+            var o: Any? = obj
+            for (m in path) o = o?.javaClass?.getMethod(m)?.invoke(o)
+            o as? Boolean
+        } catch (_: Exception) {
+            null
+        }
+        val sessionFlag = flag(session, "getSessionContext", "isEncryptData")
+        val shareFlag = flag(share, "getTreeConnect", "isEncryptData")
+        return when {
+            sessionFlag == true || shareFlag == true -> true
+            sessionFlag == null && shareFlag == null -> null
+            else -> false
+        }
+    }
+
+    /** Connects, creates the folder, writes and deletes a small test file. Returns whether traffic is encrypted. */
+    fun test(): Boolean? {
         connect()
         val dir = basePath()
         ensureDir(dir)
@@ -61,6 +82,7 @@ class SmbTarget(private val config: SmbConfig) : Closeable {
             f.write(bytes, 0, 0, bytes.size)
         }
         share!!.rm(path)
+        return encrypted()
     }
 
     fun basePath(): String = config.path.trim('/', ' ').replace('/', '\\')

@@ -53,6 +53,12 @@ Free and open source. No accounts, no cloud, no ads, no tracking.
 - Back up to an **SMB share** (NAS or computer) and/or an **ODC Server**
 - Wi-Fi only by default; optional cellular uploads with a monthly limit; optional "only while charging"
 - Uploads resume after interruptions and are verified with SHA-256 before a clip counts as backed up
+- Uses your server's **home address** automatically on your home Wi-Fi (faster uploads), and its internet
+  address elsewhere
+- Connects securely over HTTPS: with a free Let's Encrypt certificate (set up automatically by the server's
+  optional HTTPS container), or with the server's built-in HTTPS, which needs no domain: the pairing QR
+  code tells the phone exactly which server certificate to trust
+- Warns when a connection isn't encrypted (an `http://` server address, or an SMB share without encryption)
 - Choose to keep or delete the phone copy after upload; locked clips and clips you mark "Keep on
   phone" always stay
 - **Encrypt** clips on the phone whenever you like, and/or encrypt SMB uploads (AES-256-GCM with your
@@ -64,7 +70,8 @@ Free and open source. No accounts, no cloud, no ads, no tracking.
 - **Map View** of your clips in the app: see where each clip was recorded and play it
 - **All cameras** in the app: play a car's cameras side by side, in sync, streamed from the server
 - **Synced playback** of all of a car's cameras side by side
-- Sharing with family members, two-factor sign-in, alerts as browser notifications or via ntfy
+- Sharing with family members, two-factor sign-in, signed-in devices, an activity log, daily database
+  backups, alerts as browser notifications or via ntfy
 - Retention per car and storage limits per person; play phone-encrypted clips with your passphrase
 - **Smart search** ("white pickup truck", "bridge", "snow") and optional **license plate search and
   plate log**, running on your server
@@ -168,29 +175,15 @@ Planned features, in no particular order:
 - **Home Assistant integration:** car location, presence and alerts in Home Assistant
 - **Viofo dashcam import:** Viofo cameras on your home Wi-Fi sync their recordings (with GPS) to the ODC
   Server automatically, alongside phone footage
-- **Home address for the server:** on your home Wi-Fi the app talks to the ODC Server directly on your
-  network (faster uploads), and uses its internet address elsewhere
-- **Built-in HTTPS:** the ODC Server can secure connections itself, without a domain or reverse proxy; the
-  pairing QR code tells the phone exactly which server to trust
-- **Connection security warnings:** clear warnings (not blocks) when a server address uses unencrypted
-  `http://` over the internet, and when an SMB share doesn't encrypt traffic, recommending HTTPS and SMB encryption
-- **Web security headers:** stricter browser protections for the web app, and HTTPS-only mode once it's
-  served over HTTPS
 - **Clip trimming:** cut out just the part that matters before sharing or exporting
 - **Parking spot:** "Where did I park?" in the app, from the car's last known position
-- **Server backups:** scheduled backups of the ODC Server's database (trips, settings, plate log, accounts)
 - **Bulk actions:** select many clips at once to lock, delete, encrypt or download, in the app and on the server
-- **Signed-in devices:** see where your account is signed in and sign out other devices
-- **Audit log:** a record of sign-ins, sharing changes, plate log views and deletions
 - **Setup checklist:** a getting-started list on the server's home page for new installs
 - **Calendar view:** see at a glance which days have footage, and jump to them
 - **App lock (optional):** require your fingerprint, face or screen lock to open clips and settings
 - **Custom themes (optional):** choose colors and light/dark appearance in the app and the web app
 - **Accessibility settings (optional):** larger text and controls, higher contrast, and screen reader support
 - **Quick Settings tile and widget:** start and stop recording from Android's pull-down menu or the home screen
-- **Automated security scanning (free tools only):** dependency alerts and update pull requests (Dependabot),
-  code scanning (CodeQL) and secret scanning once the repository is public, and an open-source scan of
-  the server's Docker image
 
 Suggestions and bug reports are welcome in [Issues](../../issues).
 

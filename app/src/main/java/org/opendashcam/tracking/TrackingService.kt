@@ -205,9 +205,8 @@ class TrackingService : Service() {
     private fun flush() {
         if (sending || queue.isEmpty() || !settings.serverPaired) return
         sending = true
-        val client = ServerClient(settings.serverUrl, settings.serverToken)
-        // Network calls must not run on the location thread's looper callbacks for long; batches are small.
         Thread {
+            val client = ServerClient.forSettings(this, settings)
             var error: String? = null
             try {
                 while (true) {
