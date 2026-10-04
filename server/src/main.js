@@ -55,6 +55,7 @@ const app = {
 
   deleteClipFiles(clip) {
     forgetClip(clip.id);
+    fs.rmSync(path.join(config.cacheDir, 'decrypted', `${clip.id}.mp4`), { force: true });
     const base = clip.path.replace(/\.(mp4|odcenc)$/, '');
     for (const f of [clip.path, `${base}.gpx`, `${base}.srt`, `${base}.gpx.odcenc`, `${base}.srt.odcenc`, thumbPath(clip.id), h264Path(clip.id)]) {
       fs.rmSync(f, { force: true });
@@ -71,29 +72,70 @@ function deleteClip(c) {
 
 function enforceRetention() {
   const s = getSettings(db);
-  if (s.retentionDays > 0) {
-    const cutoff = now() - s.retentionDays * 86400_000;
-    for (const c of db.all('SELECT id, path FROM clips WHERE locked = 0 AND started_at < ?', cutoff)) deleteClip(c);
+  const t = now();
+  const deleteOldestUntil = (rows, overBy) => {
+    let left = overBy;
+    for (const c of rows) {
+      if (left <= 0) break;
+      deleteClip(c);
+      left -= c.size;
+    }
+  };
+  // Age: each car's own setting (0 = keep forever), else the server default.
+  for (const car of db.all('SELECT id, retention_days FROM cars')) {
+    const days = car.retention_days ?? s.retentionDays;
+    if (days > 0) for (const c of db.all('SELECT id, path FROM clips WHERE car_id = ? AND locked = 0 AND started_at < ?', car.id, t - days * 86400_000)) deleteClip(c);
   }
+  // Size limit per car.
+  for (const car of db.all('SELECT id, name, storage_cap_gb FROM cars WHERE storage_cap_gb > 0')) {
+    const used = db.get('SELECT COALESCE(SUM(size), 0) s FROM clips WHERE car_id = ?', car.id).s;
+    const cap = car.storage_cap_gb * 1024 ** 3;
+    if (used > cap) deleteOldestUntil(db.all('SELECT id, path, size FROM clips WHERE car_id = ? AND locked = 0 ORDER BY started_at', car.id), used - cap);
+  }
+  // Size limit per person, across the cars they own.
+  for (const u of db.all('SELECT id, username, quota_gb FROM users WHERE quota_gb > 0')) {
+    const used = db.get('SELECT COALESCE(SUM(c.size), 0) s FROM clips c JOIN cars k ON k.id = c.car_id WHERE k.owner_id = ?', u.id).s;
+    const cap = u.quota_gb * 1024 ** 3;
+    if (used > cap) {
+      deleteOldestUntil(db.all('SELECT c.id, c.path, c.size FROM clips c JOIN cars k ON k.id = c.car_id WHERE k.owner_id = ? AND c.locked = 0 ORDER BY c.started_at', u.id), used - cap);
+    }
+    const after = db.get('SELECT COALESCE(SUM(c.size), 0) s FROM clips c JOIN cars k ON k.id = c.car_id WHERE k.owner_id = ?', u.id).s;
+    const day = new Date().toISOString().slice(0, 10);
+    if (after >= cap * 0.9 && getMeta(db, `quota_warned_${u.id}`) !== day) {
+      setMeta(db, `quota_warned_${u.id}`, day);
+      const car = db.get('SELECT id FROM cars WHERE owner_id = ? LIMIT 1', u.id);
+      notify(db, {
+        title: `${u.username}: storage limit almost reached`,
+        message: `Footage uses ${(after / 1024 ** 3).toFixed(1)} of ${u.quota_gb} GB. The oldest unlocked clips are being removed.`,
+        tags: ['floppy_disk'], carId: car?.id ?? null,
+      });
+    }
+  }
+  // Server-wide limit.
   if (s.storageCapGb > 0) {
     const cap = s.storageCapGb * 1024 ** 3;
-    let used = db.get('SELECT COALESCE(SUM(size), 0) s FROM clips').s;
-    if (used > cap) {
-      for (const c of db.all('SELECT id, path, size FROM clips WHERE locked = 0 ORDER BY started_at')) {
-        if (used <= cap) break;
-        deleteClip(c);
-        used -= c.size;
-      }
-    }
+    const used = db.get('SELECT COALESCE(SUM(size), 0) s FROM clips').s;
+    if (used > cap) deleteOldestUntil(db.all('SELECT id, path, size FROM clips WHERE locked = 0 ORDER BY started_at'), used - cap);
+    const after = db.get('SELECT COALESCE(SUM(size), 0) s FROM clips').s;
     const day = new Date().toISOString().slice(0, 10);
-    if (used >= cap * 0.9 && getMeta(db, 'cap_warned') !== day) {
+    if (after >= cap * 0.9 && getMeta(db, 'cap_warned') !== day) {
       setMeta(db, 'cap_warned', day);
       notify(db, {
         title: 'ODC server storage almost full',
-        message: `Footage uses ${(used / 1024 ** 3).toFixed(1)} of ${s.storageCapGb} GB. The oldest unlocked clips are being removed.`,
+        message: `Footage uses ${(after / 1024 ** 3).toFixed(1)} of ${s.storageCapGb} GB. The oldest unlocked clips are being removed.`,
         tags: ['floppy_disk'],
       });
     }
+  }
+}
+app.enforceRetention = enforceRetention;
+
+/** Decrypted playback copies are removed an hour after their last use. */
+function cleanDecrypted() {
+  const dir = path.join(config.cacheDir, 'decrypted');
+  for (const f of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+    const p = path.join(dir, f);
+    if (Date.now() - fs.statSync(p).mtimeMs > 3600_000) fs.rmSync(p, { force: true });
   }
 }
 
@@ -109,6 +151,7 @@ function checkOffline() {
       title: `${c.car_name} · ${c.label} went offline`,
       message: `No contact for ${s.offlineAlertMin} minutes while it was recording.`,
       tags: ['electric_plug'],
+      carId: c.car_id,
     });
   }
 }
@@ -160,6 +203,7 @@ async function analyzeLoop() {
 app.analyzeNow = () => { analyzeLoop(); };
 every(Number(process.env.ODC_INDEX_INTERVAL_MS) || 30_000, analyzeLoop);
 every(3600_000, () => { enforceRetention(); cleanUploads(); learnAllPlaces(); purgeOldPlates(db); });
+every(10 * 60_000, cleanDecrypted);
 
 // Finish processing for clips that arrived before a restart.
 for (const c of db.all('SELECT id FROM clips WHERE has_thumb = 0 AND encrypted = 0 ORDER BY started_at DESC LIMIT 200')) app.onClipAdded(c.id);

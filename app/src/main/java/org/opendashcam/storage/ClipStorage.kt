@@ -77,7 +77,7 @@ class ClipStorage(private val context: Context, private val settings: OdcSetting
     private val lockedDir: File get() = File(root, "locked").apply { mkdirs() }
 
     @Synchronized
-    fun newSegmentFile(label: String, time: Long = System.currentTimeMillis()): File {
+    fun newSegmentFile(label: String, time: Long = org.opendashcam.recording.ClockSync.now()): File {
         val base = "ODC_${STAMP.format(Date(time))}_$label"
         var f = File(clipsDir, "$base.mp4")
         var n = 1

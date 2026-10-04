@@ -1,5 +1,23 @@
 # Changelog
 
+## App 0.9.0 · Server 0.9.0
+- **App:** crash-resistant recording. Clips are written as fragmented MP4 and saved continuously, so a crash
+  or power loss costs at most about a second; clip lengths are now exact. New recording engine (camera →
+  GPU → hardware encoder), which also handles the date/time stamp and time-lapse
+- **App:** screen-off check: ODC verifies whether recording keeps going whenever the screen is off for 20
+  seconds, with a guided test in setup and Settings
+- **App:** "All cameras" plays a car's cameras side by side in sync, streamed from the ODC Server
+- **App:** optional release signing with your own key in CI
+- **Server:** retention per car (including "keep forever") and storage limits per person
+- **Server:** play phone-encrypted clips by entering the passphrase (not stored; decrypted copy removed after an hour)
+- **Server:** browser notifications (Web Push) for alerts, even with the page closed
+
+## App 0.8.1
+- Date and time stamp burned into the video (bottom-left, upright however the phone is mounted), with
+  optional speed and GPS coordinates; never shows location inside privacy zones
+- The phone's clock is corrected using GPS time, or the ODC Server's time when there's no GPS, for accurate
+  clip names, stamps and multi-camera sync
+
 ## App 0.8.0 · Server 0.8.0
 - **App:** privacy zones are drawn and edited on a map: tap to add, tap a zone to change it, tap again to move it
 - **App:** tracking-only mode (with an ODC Server): reports position and speed in the background without

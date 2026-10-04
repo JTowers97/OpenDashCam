@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { config } from './config.js';
 import {
   carRole, checkLoginRate, checkStreamToken, clearCookie, createSession, destroySession, hashPassword,
@@ -9,6 +10,8 @@ import { getSettings, saveSettings } from './db.js';
 import { HttpError, now, num, readJson, send, sha256hex, str } from './util.js';
 import { carLive, learnPlaces, markTripsDirty, mergeTrips, rebuildTrips, relabelTrips, routePoints, splitTrip } from './tracks.js';
 import { newRecoveryCodes, newSecret, otpauthUrl, verifyTotp } from './totp.js';
+import { vapidKeys } from './webpush.js';
+import { WrongPassphrase, decryptFile } from './crypto-odcenc.js';
 import { indexerState, indexStats, mlHealth, resetIndex, runIndexer, visualSearch } from './search.js';
 import {
   erasePlates, mergePlates, normalizePlate, plateCrop, plateLog, plateStats, purgeOldPlates, runPlateIndexer, searchPlates, similarPlates,
@@ -195,7 +198,9 @@ export function registerWebRoutes(router, app) {
 
   router.add('GET', '/api/users', (ctx) => {
     requireAdmin(ctx);
-    send(ctx.res, 200, db.all('SELECT id, username, is_admin AS isAdmin, totp_enabled AS totpEnabled, created_at AS createdAt FROM users ORDER BY id')
+    send(ctx.res, 200, db.all(`SELECT u.id, u.username, u.is_admin AS isAdmin, u.totp_enabled AS totpEnabled, u.created_at AS createdAt,
+        u.quota_gb AS quotaGb, (SELECT COALESCE(SUM(c.size), 0) FROM clips c JOIN cars k ON k.id = c.car_id WHERE k.owner_id = u.id) AS usedBytes
+      FROM users u ORDER BY u.id`)
       .map((u) => ({ ...u, isAdmin: !!u.isAdmin, totpEnabled: !!u.totpEnabled })));
   });
 
@@ -219,6 +224,11 @@ export function registerWebRoutes(router, app) {
       validatePassword(b.password);
       db.run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(b.password), id);
       db.run('DELETE FROM sessions WHERE user_id = ?', id);
+    }
+    if (b.quotaGb !== undefined) {
+      const v = b.quotaGb === null || b.quotaGb === '' || Number(b.quotaGb) <= 0 ? null : Number(b.quotaGb);
+      db.run('UPDATE users SET quota_gb = ? WHERE id = ?', v, id);
+      app.enforceRetention?.();
     }
     if (b.resetTotp) {
       db.run('UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?', id);
@@ -255,6 +265,7 @@ export function registerWebRoutes(router, app) {
     return {
       id: car.id, name: car.name, owner: owner?.username, role: carRole(db, user, car.id),
       mismatchPolicy: car.mismatch_policy, truthCameraId: car.truth_camera_id,
+      retentionDays: car.retention_days, storageCapGb: car.storage_cap_gb,
       cameras, shares, clipCount: stats.n, clipBytes: stats.bytes, lastClipAt: stats.last,
       live: carLive(db, car),
     };
@@ -287,6 +298,15 @@ export function registerWebRoutes(router, app) {
       if (!['alert', 'source', 'average'].includes(b.mismatchPolicy)) throw new HttpError(400, 'Invalid policy');
       db.run('UPDATE cars SET mismatch_policy = ? WHERE id = ?', b.mismatchPolicy, id);
     }
+    if (b.retentionDays !== undefined) {
+      const v = b.retentionDays === null || b.retentionDays === '' ? null : Math.max(0, Math.round(Number(b.retentionDays) || 0));
+      db.run('UPDATE cars SET retention_days = ? WHERE id = ?', v, id);
+    }
+    if (b.storageCapGb !== undefined) {
+      const v = b.storageCapGb === null || b.storageCapGb === '' || Number(b.storageCapGb) <= 0 ? null : Number(b.storageCapGb);
+      db.run('UPDATE cars SET storage_cap_gb = ? WHERE id = ?', v, id);
+    }
+    if (b.retentionDays !== undefined || b.storageCapGb !== undefined) app.enforceRetention?.();
     if (b.truthCameraId !== undefined) {
       const ok = b.truthCameraId === null || db.get('SELECT id FROM cameras WHERE id = ? AND car_id = ?', b.truthCameraId, id);
       if (!ok) throw new HttpError(400, 'That camera is not in this car.');
@@ -464,7 +484,11 @@ export function registerWebRoutes(router, app) {
 
   router.add('GET', '/api/clips/:id/stream', async (ctx) => {
     const c = clipForMedia(ctx);
-    if (c.encrypted) throw new HttpError(415, 'This clip is encrypted. Download it and open it with odc_decrypt.');
+    if (c.encrypted) {
+      const plain = decryptedPath(c.id);
+      if (ctx.query.get('decrypted') === '1' && fs.existsSync(plain)) return serveFile(ctx, plain, 'video/mp4');
+      throw new HttpError(415, 'This clip is encrypted. Enter the passphrase to play it, or download it and use odc_decrypt.');
+    }
     if (ctx.query.get('codec') === 'h264' && c.codec !== 'h264') {
       const p = h264Path(c.id);
       if (!fs.existsSync(p)) {
@@ -609,6 +633,73 @@ export function registerWebRoutes(router, app) {
       id, from - 10 * 60_000, to).map(clipView)
       .filter((c) => c.startedAt + (c.durationMs || 180_000) >= from);
     send(ctx.res, 200, { cameras, clips, route: simplify(routePoints(db, id, from, to), 4000), from, to });
+  });
+
+  // ---------------------------------------------------------------- encrypted clips
+
+  /** Decrypts a phone-encrypted clip for playback. The passphrase isn't stored; the copy is deleted after an hour. */
+  router.add('POST', '/api/clips/:id/decrypt', async (ctx) => {
+    const u = requireUser(ctx);
+    const c = clipFor(u, ctx.params.id);
+    if (!c.encrypted) throw new HttpError(400, 'This clip is not encrypted.');
+    const b = await readJson(ctx.req);
+    const pass = String(b.passphrase || '');
+    if (!pass) throw new HttpError(400, 'Enter the passphrase.');
+    const out = decryptedPath(c.id);
+    if (!fs.existsSync(out)) {
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      try {
+        await decryptFile(c.path, out, pass);
+      } catch (e) {
+        fs.rmSync(out + '.tmp', { force: true });
+        if (e instanceof WrongPassphrase) throw new HttpError(400, 'That passphrase doesn’t open this clip.');
+        throw new HttpError(422, `Couldn’t decrypt this clip: ${e.message}`);
+      }
+    }
+    fs.utimesSync(out, new Date(), new Date());
+    send(ctx.res, 200, { ok: true, streamUrl: `/api/clips/${c.id}/stream?decrypted=1` });
+  });
+
+  // ---------------------------------------------------------------- browser notifications
+
+  router.add('GET', '/api/push/key', (ctx) => {
+    requireUser(ctx);
+    send(ctx.res, 200, { publicKey: vapidKeys(db).publicKey });
+  });
+
+  router.add('POST', '/api/push/subscribe', async (ctx) => {
+    const u = requireUser(ctx);
+    const b = await readJson(ctx.req);
+    const endpoint = String(b.endpoint || '');
+    if (!/^https:\/\//.test(endpoint) && !/^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(endpoint)) throw new HttpError(400, 'Invalid push endpoint');
+    if (!b.keys?.p256dh || !b.keys?.auth) throw new HttpError(400, 'Missing subscription keys');
+    db.run(`INSERT INTO push_subs(endpoint, user_id, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`,
+      endpoint, u.id, String(b.keys.p256dh), String(b.keys.auth), now());
+    send(ctx.res, 200, { ok: true });
+  });
+
+  router.add('POST', '/api/push/unsubscribe', async (ctx) => {
+    const u = requireUser(ctx);
+    const b = await readJson(ctx.req);
+    db.run('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?', String(b.endpoint || ''), u.id);
+    send(ctx.res, 200, { ok: true });
+  });
+
+  router.add('POST', '/api/push/test', async (ctx) => {
+    const u = requireUser(ctx);
+    const subs = db.all('SELECT * FROM push_subs WHERE user_id = ?', u.id);
+    if (!subs.length) throw new HttpError(400, 'Turn on notifications in this browser first.');
+    const { sendPush } = await import('./webpush.js');
+    let sent = 0;
+    for (const s of subs) {
+      try {
+        const alive = await sendPush(db, s, { title: 'Open Dash Cam', body: 'Notifications work in this browser.', url: '/#/events' }, 'mailto:noreply@opendashcam.invalid');
+        if (alive) sent++;
+        else db.run('DELETE FROM push_subs WHERE endpoint = ?', s.endpoint);
+      } catch { /* reported below */ }
+    }
+    send(ctx.res, sent ? 200 : 502, { ok: sent > 0, sent, error: sent ? undefined : 'The browser’s push service didn’t accept the notification.' });
   });
 
   // ---------------------------------------------------------------- smart search
@@ -818,6 +909,8 @@ export function registerWebRoutes(router, app) {
     })));
   });
 }
+
+const decryptedPath = (clipId) => path.join(config.cacheDir, 'decrypted', `${clipId}.mp4`);
 
 const tripView = (t) => ({
   id: t.id, carId: t.car_id, carName: t.car_name, startT: t.start_t, endT: t.end_t, distanceM: t.distance_m,

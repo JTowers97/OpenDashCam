@@ -14,5 +14,5 @@ export const config = {
   ffprobe: process.env.ODC_FFPROBE || 'ffprobe',
   // Set when the server sits behind a reverse proxy that sets X-Forwarded-For.
   trustProxy: process.env.ODC_TRUST_PROXY === '1',
-  version: '0.8.0',
+  version: '0.9.0',
 };

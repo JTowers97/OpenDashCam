@@ -367,7 +367,25 @@ async function openClip(id, onChange, offsetMs) {
   let polling = true;
   body.addEventListener('close', () => { polling = false; video.pause(); video.removeAttribute('src'); video.load(); });
   if (c.encrypted) {
-    note.textContent = 'This clip was encrypted on the phone. Download it and open it with tools/odc_decrypt.py.';
+    note.replaceChildren();
+    const pass = h('input', { type: 'password', placeholder: 'Encryption passphrase', autocomplete: 'off' });
+    const err = h('span', { class: 'error small' });
+    const go = h('button', { class: 'btn primary', onclick: async () => {
+      go.disabled = true;
+      go.textContent = 'Decrypting…';
+      try {
+        const r = await api('POST', `/api/clips/${id}/decrypt`, { passphrase: pass.value });
+        video.src = r.data.streamUrl;
+        body.prepend(video);
+        note.replaceChildren(h('span', { class: 'muted small' }, 'Decrypted on the server for playback. The passphrase isn’t stored, and the decrypted copy is deleted an hour after you stop watching.'));
+        video.play().catch(() => {});
+      } catch (e) {
+        err.textContent = e.message;
+        go.disabled = false;
+        go.textContent = 'Decrypt and play';
+      }
+    } }, 'Decrypt and play');
+    note.append(h('span', { class: 'muted small' }, 'This clip was encrypted on the phone. '), h('div', { class: 'row', style: 'margin-top:.5rem' }, pass, go, err));
   } else if (hevc && !canHevc) {
     note.textContent = 'This browser can’t play H.265, so the server is preparing a compatible copy…';
     (async () => {
@@ -1037,6 +1055,30 @@ function carCard(car) {
     card.append(h('h3', {}, 'When cameras disagree on location or speed'), h('div', { class: 'row' }, pol, truth));
   }
 
+  // Footage kept for this car
+  if (manage) {
+    const mode = h('select', {}, [['default', 'Server default'], ['forever', 'Keep forever'], ['days', 'Delete unlocked clips after…']]
+      .map(([v, l]) => h('option', { value: v, selected: (car.retentionDays == null ? 'default' : car.retentionDays === 0 ? 'forever' : 'days') === v }, l)));
+    const days = h('input', { type: 'number', min: '1', value: car.retentionDays > 0 ? car.retentionDays : 30, style: 'width:90px' });
+    const daysLabel = h('span', { class: 'small muted' }, 'days');
+    const cap = h('input', { type: 'number', min: '0', step: '1', value: car.storageCapGb ?? '', placeholder: 'No limit', style: 'width:110px' });
+    const sync = () => { days.style.display = daysLabel.style.display = mode.value === 'days' ? '' : 'none'; };
+    mode.onchange = sync;
+    sync();
+    card.append(h('h3', {}, 'Footage kept for this car'),
+      h('div', { class: 'row' }, mode, days, daysLabel),
+      h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'Size limit (GB)'), cap,
+        h('button', { class: 'btn small', onclick: async () => {
+          await api('PATCH', `/api/cars/${car.id}`, {
+            retentionDays: mode.value === 'default' ? null : mode.value === 'forever' ? 0 : Number(days.value),
+            storageCapGb: cap.value === '' ? null : Number(cap.value),
+          });
+          toast('Saved. Locked clips are always kept.');
+          render();
+        } }, 'Save')),
+      h('p', { class: 'muted small' }, 'When a limit is reached, the oldest unlocked clips of this car are removed. Locked clips are always kept.'));
+  }
+
   // Learned places (commute learning)
   const placesBox = h('div');
   card.append(placesBox);
@@ -1274,6 +1316,51 @@ async function serverSettingsForm(onSaved) {
   return form;
 }
 
+function notificationsCard() {
+  const card = h('div', { class: 'card stack', style: 'max-width:640px;margin-top:1rem' }, h('h2', {}, 'Notifications in this browser'));
+  const status = h('p', { class: 'small' });
+  const buttons = h('div', { class: 'row' });
+  card.append(h('p', { class: 'muted small' }, 'Impacts, overheating, cameras going offline and other alerts for your cars, shown by this browser even when ODC isn’t open.'), status, buttons);
+  const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  if (!supported) { status.textContent = 'This browser doesn’t support notifications from websites.'; return card; }
+  if (!window.isSecureContext) {
+    status.textContent = 'Browsers only allow notifications on secure (https://) addresses. Open ODC through HTTPS (see the server README), or use ntfy alerts in Server settings.';
+    return card;
+  }
+  const b64 = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+  const refresh = async () => {
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    const sub = await reg.pushManager.getSubscription();
+    buttons.replaceChildren();
+    if (Notification.permission === 'denied') {
+      status.textContent = 'Notifications are blocked for this site. Allow them in the browser’s site settings, then reload.';
+    } else if (sub) {
+      status.textContent = 'On for this browser.';
+      buttons.append(
+        h('button', { class: 'btn', onclick: async () => { try { await api('POST', '/api/push/test'); toast('Test notification sent.'); } catch (e) { toast(e.message); } } }, 'Send a test'),
+        h('button', { class: 'btn danger', onclick: async () => {
+          await api('POST', '/api/push/unsubscribe', { endpoint: sub.endpoint });
+          await sub.unsubscribe();
+          refresh();
+        } }, 'Turn off'));
+    } else {
+      status.textContent = 'Off for this browser.';
+      buttons.append(h('button', { class: 'btn primary', onclick: async () => {
+        try {
+          if ((await Notification.requestPermission()) !== 'granted') return refresh();
+          const { data } = await api('GET', '/api/push/key');
+          const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(data.publicKey) });
+          await api('POST', '/api/push/subscribe', s.toJSON());
+          toast('Notifications are on.');
+        } catch (e) { toast(`Couldn’t turn on notifications: ${e.message}`); }
+        refresh();
+      } }, 'Turn on'));
+    }
+  };
+  refresh().catch((e) => { status.textContent = e.message; });
+  return card;
+}
+
 function showRecoveryCodes(codes) {
   const box = h('div', { class: 'stack' },
     h('h2', {}, 'Save your recovery codes'),
@@ -1349,6 +1436,7 @@ async function pageSettings(main) {
       } }, 'Change password')));
 
   main.append(await twoFactorCard());
+  main.append(notificationsCard());
 
   const { data: st } = await api('GET', '/api/storage');
   main.append(h('div', { class: 'card stack', style: 'max-width:640px;margin-top:1rem' }, h('h2', {}, 'Storage'),
@@ -1366,10 +1454,17 @@ async function pageSettings(main) {
     h('p', { class: 'muted small' }, 'Admins manage accounts and server settings. Footage is only visible to a car’s owner and the people it’s shared with.'),
     h('table', {}, users.map((u) => h('tr', {},
       h('td', {}, u.username, u.isAdmin ? h('span', { class: 'badge', style: 'margin-left:.5rem' }, 'Admin') : null,
-        u.totpEnabled ? h('span', { class: 'badge ok', style: 'margin-left:.5rem' }, '2FA') : null),
+        u.totpEnabled ? h('span', { class: 'badge ok', style: 'margin-left:.5rem' }, '2FA') : null,
+        h('div', { class: 'small muted' }, `${fmtBytes(u.usedBytes)} used` + (u.quotaGb ? ` of ${u.quotaGb} GB` : ''))),
       h('td', {}, h('div', { class: 'row' },
         h('button', { class: 'btn small', onclick: async () => { const p = prompt(`New password for ${u.username}`); if (p) { try { await api('PATCH', `/api/users/${u.id}`, { password: p }); toast('Password reset.'); } catch (e) { toast(e.message); } } } }, 'Reset password'),
         u.id !== state.me.id ? h('button', { class: 'btn small', onclick: async () => { await api('PATCH', `/api/users/${u.id}`, { isAdmin: !u.isAdmin }); render(); } }, u.isAdmin ? 'Remove admin' : 'Make admin') : null,
+        h('button', { class: 'btn small', onclick: async () => {
+          const v = prompt(`Storage limit for ${u.username} in GB (across the cars they own). Leave empty for no limit. When reached, their oldest unlocked clips are removed.`, u.quotaGb ?? '');
+          if (v === null) return;
+          await api('PATCH', `/api/users/${u.id}`, { quotaGb: v.trim() === '' ? null : Number(v) });
+          render();
+        } }, 'Storage limit'),
         u.totpEnabled && u.id !== state.me.id ? h('button', { class: 'btn small', onclick: async () => {
           if (confirm(`Turn off two-factor sign-in for ${u.username}? Use this if they lost their phone.`)) { await api('PATCH', `/api/users/${u.id}`, { resetTotp: true }); render(); }
         } }, 'Reset 2FA') : null,

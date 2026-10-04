@@ -95,6 +95,7 @@ fun SettingsScreen(
 
     var showAudioDisclaimer by remember { mutableStateOf(false) }
     var showPassphraseDialog by remember { mutableStateOf(false) }
+    var showScreenOffTest by remember { mutableStateOf(false) }
     var enableUploadEncryptionAfterPassphrase by remember { mutableStateOf(false) }
     val impactAvailable = remember { ImpactDetector.isAvailable(context) }
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -195,7 +196,7 @@ fun SettingsScreen(
             selected = settings.segmentMinutes,
             label = { "$it min" },
             onSelect = { m -> set { settings.segmentMinutes = m } },
-            subtitle = "Approximate: clips split by file size, so quiet scenes can run a little longer.",
+            subtitle = "Clips are saved continuously as they record, so a crash or power loss costs at most about a second.",
         )
         ChoiceRow(
             title = "Screen while recording",
@@ -203,9 +204,30 @@ fun SettingsScreen(
             selected = settings.displayMode,
             label = { it.label },
             onSelect = { d -> set { settings.displayMode = d } },
-            subtitle = "Dimmed keeps the screen on at minimum brightness (tap to wake). " +
-                "Screen off saves the most power, but some phones stop background recording; test it on yours first.",
+            subtitle = "Dimmed keeps the screen on at minimum brightness (tap to wake). Screen off saves the most power, " +
+                "but some phones stop recording with the screen off. " + screenOffStatus(settings),
         )
+        TextButton(onClick = { showScreenOffTest = true }) { Text("Test screen-off recording") }
+        SwitchRow(
+            title = "Date and time stamp on video",
+            checked = settings.overlayEnabled,
+            onChange = { on -> set { settings.overlayEnabled = on } },
+            subtitle = "Burned into the picture (bottom-left), so it shows in any player and stays with the footage. Uses the clock corrected by GPS when available.",
+        )
+        if (settings.overlayEnabled) {
+            SwitchRow(
+                title = "Include speed",
+                checked = settings.overlaySpeed,
+                onChange = { on -> set { settings.overlaySpeed = on } },
+                subtitle = if (settings.gpsEnabled) "In ${settings.resolvedSpeedUnit.label}." else "Needs GPS logging (Settings → Location).",
+            )
+            SwitchRow(
+                title = "Include GPS coordinates",
+                checked = settings.overlayCoords,
+                onChange = { on -> set { settings.overlayCoords = on } },
+                subtitle = "Never shown inside privacy zones.",
+            )
+        }
         SwitchRow(
             title = "Record audio",
             checked = settings.audioEnabled,
@@ -302,10 +324,10 @@ fun SettingsScreen(
             onSelect = { u -> set { settings.speedUnit = u } },
         )
         SwitchRow(
-            title = "Date, time and speed subtitles",
+            title = "Subtitle file with date, time and speed",
             checked = settings.subtitlesEnabled,
             onChange = { on -> set { settings.subtitlesEnabled = on } },
-            subtitle = "Saves a subtitle file with each clip that most video players (VLC, MX Player) show over the video. A burned-in overlay will come with the new video engine.",
+            subtitle = "Saves a subtitle file with each clip that players like VLC can show or hide. For a stamp that's part of the picture, use \"Date and time stamp on video\" under Recording.",
         )
         val zoneCount = settings.privacyZones.size
         OutlinedButton(onClick = onOpenPrivacyZones, modifier = Modifier.padding(vertical = 6.dp)) {
@@ -519,6 +541,8 @@ fun SettingsScreen(
         OutlinedButton(onClick = onRerunSetup) { Text("Run setup again") }
         Spacer(Modifier.height(32.dp))
     }
+
+    if (showScreenOffTest) ScreenOffTestDialog { showScreenOffTest = false; version++ }
 
     if (showPassphraseDialog) {
         PassphraseDialog { pass ->

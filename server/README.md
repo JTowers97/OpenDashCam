@@ -28,7 +28,13 @@ built-in database; an optional second container adds smart search.
   truth, or average them, with adjustable thresholds
 - **Alerts** via [ntfy](https://ntfy.sh): impacts, overheating, low phone storage, battery cutoff, a
   camera going offline, cameras disagreeing, server storage near its limit
-- **Retention** (off by default): maximum total footage size and/or maximum age; locked clips are kept
+- **Retention** (off by default): maximum total footage size and/or maximum age for the server, per car
+  (including "keep forever"), and a storage limit per person across the cars they own; locked clips
+  are always kept
+- **Browser notifications:** alerts appear as notifications from your browser, even with ODC closed
+  (Settings → Notifications in this browser; needs HTTPS). Each person gets alerts for the cars they can see
+- **Encrypted clips:** clips encrypted on the phone play in the web app after you enter the passphrase.
+  It isn't stored, and the decrypted copy is deleted an hour after use
 
 Everything runs on your machine. Place names, smart search and plate reading are all computed locally.
 

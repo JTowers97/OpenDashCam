@@ -31,14 +31,14 @@ data class StreamProfile(
     val audio: Boolean,
     val orientationHint: Int,
     val segmentMs: Int,
-    /** File size at which the recorder rolls over to the next clip (approximately segmentMs of video). */
-    val segmentBytes: Long,
     /** Time-lapse: frames captured per second (null = normal video). */
     val captureRate: Double? = null,
     /** Motion-activated parking: analyze frames and keep only clips around motion. */
     val motionDetect: Boolean = false,
     val motionSensitivity: Sensitivity = Sensitivity.MEDIUM,
     val analysisSize: Size? = null,
+    /** Burn the date/time stamp into the video. */
+    val overlay: Boolean = false,
 ) {
     fun describe(): String = when {
         captureRate != null -> "$cameraName ${height}p time-lapse, 1 frame every ${(1 / captureRate).toInt()} s"
@@ -128,10 +128,6 @@ object ProfileBuilder {
                 else -> settings.segmentMinutes.coerceIn(1, 10) * 60_000
             }
             val captureRate = if (timelapse) 1.0 / settings.timelapseIntervalSec.coerceIn(1, 10) else null
-            // Seconds of *video* in one clip: time-lapse compresses real time.
-            val videoSeconds = segmentMs / 1000.0 * (if (captureRate != null) captureRate / actualFps else 1.0)
-            val audioBitrate = if (index == 0 && settings.audioEnabled && micGranted && !timelapse) 128_000 else 0
-            val segmentBytes = ((bitrate + audioBitrate) * videoSeconds / 8).toLong().coerceAtLeast(1_000_000L)
             StreamProfile(
                 label = name.lowercase() + if (parking) "-park" else "",
                 cameraName = name,
@@ -146,11 +142,11 @@ object ProfileBuilder {
                 audio = index == 0 && settings.audioEnabled && micGranted && !timelapse,
                 orientationHint = (info.sensorOrientation - rotation + 360) % 360,
                 segmentMs = segmentMs,
-                segmentBytes = segmentBytes,
                 captureRate = captureRate,
                 motionDetect = motion,
                 motionSensitivity = settings.motionSensitivity,
                 analysisSize = if (motion) caps.analysisSize(info) else null,
+                overlay = settings.overlayEnabled,
             )
         }
         return SessionPlan(streams, notes)

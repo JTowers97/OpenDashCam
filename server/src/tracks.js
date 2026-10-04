@@ -320,6 +320,7 @@ function checkMismatch(db, carId) {
       title: `${car?.name ?? 'Car'}: cameras disagree`,
       message: `Two cameras report positions ${fmtDist(s.units, worst.distance)} apart and speeds ${fmtSpeedKmh(s.units, worst.speedDiffKmh)} apart.`,
       tags: ['warning'],
+      carId,
     });
   }
 }

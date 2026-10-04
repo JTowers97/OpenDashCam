@@ -28,7 +28,7 @@ import org.opendashcam.recording.RecordingService
 import org.opendashcam.settings.OdcSettings
 import org.opendashcam.tracking.TrackingService
 
-enum class Screen { ONBOARDING, HOME, SETTINGS, CLIPS, PRIVACY_ZONES, SERVER_CLIPS, SERVER_MAP }
+enum class Screen { ONBOARDING, HOME, SETTINGS, CLIPS, PRIVACY_ZONES, SERVER_CLIPS, SERVER_MAP, SERVER_SYNC }
 
 class MainActivity : ComponentActivity() {
     private lateinit var settings: OdcSettings
@@ -77,6 +77,8 @@ fun OdcRoot(settings: OdcSettings, autoStartRequests: Int) {
         mutableStateOf(if (settings.onboardingDone) Screen.HOME else Screen.ONBOARDING)
     }
     var serverClipsBack by rememberSaveable { mutableStateOf(Screen.CLIPS) }
+    var syncBack by rememberSaveable { mutableStateOf(Screen.SERVER_CLIPS) }
+    var syncFrom by rememberSaveable { mutableStateOf(0L) }
     // Only the recording screen is forced to landscape; clips, settings and setup follow the phone.
     val activity = LocalContext.current as? Activity
     LaunchedEffect(screen) {
@@ -94,6 +96,7 @@ fun OdcRoot(settings: OdcSettings, autoStartRequests: Int) {
             Screen.PRIVACY_ZONES -> Screen.SETTINGS
             Screen.SERVER_CLIPS -> serverClipsBack
             Screen.SERVER_MAP -> Screen.CLIPS
+            Screen.SERVER_SYNC -> syncBack
             else -> Screen.HOME
         }
     }
@@ -127,8 +130,17 @@ fun OdcRoot(settings: OdcSettings, autoStartRequests: Int) {
                 onOpenMap = { screen = Screen.SERVER_MAP },
                 modifier = Modifier.safeDrawingPadding(),
             )
-            Screen.SERVER_MAP -> ServerMapScreen(settings, onBack = { screen = Screen.CLIPS }, modifier = Modifier.safeDrawingPadding())
-            Screen.SERVER_CLIPS -> ServerClipsScreen(settings, onBack = { screen = serverClipsBack }, modifier = Modifier.safeDrawingPadding())
+            Screen.SERVER_MAP -> ServerMapScreen(
+                settings, onBack = { screen = Screen.CLIPS },
+                onOpenSync = { t -> syncFrom = t - 60_000; syncBack = Screen.SERVER_MAP; screen = Screen.SERVER_SYNC },
+                modifier = Modifier.safeDrawingPadding(),
+            )
+            Screen.SERVER_SYNC -> ServerSyncScreen(settings, syncFrom, onBack = { screen = syncBack }, modifier = Modifier.safeDrawingPadding())
+            Screen.SERVER_CLIPS -> ServerClipsScreen(
+                settings, onBack = { screen = serverClipsBack },
+                onOpenSync = { t -> syncFrom = t - 60_000; syncBack = Screen.SERVER_CLIPS; screen = Screen.SERVER_SYNC },
+                modifier = Modifier.safeDrawingPadding(),
+            )
             Screen.PRIVACY_ZONES -> PrivacyZonesScreen(
                 settings, onBack = { screen = Screen.SETTINGS }, modifier = Modifier.safeDrawingPadding(),
             )

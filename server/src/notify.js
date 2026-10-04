@@ -1,22 +1,42 @@
 import { getSettings } from './db.js';
+import { sendPush } from './webpush.js';
 
 /**
- * Sends alerts to ntfy (https://ntfy.sh or self-hosted). The URL includes the topic,
- * e.g. https://ntfy.example.com/odc-alerts. Failures are logged and ignored.
+ * Sends an alert to ntfy (if configured) and as a browser notification to the people concerned:
+ * everyone who can see the car (owner and shares), or the admins for server-wide alerts.
+ * Failures are logged and ignored.
  */
-export async function notify(db, { title, message, priority = 3, tags = [] }) {
+export async function notify(db, { title, message, priority = 3, tags = [], carId = null, url = '/#/events' }) {
   const s = getSettings(db);
-  if (!s.ntfyUrl) return false;
-  try {
-    const headers = { Title: asciiHeader(title), Priority: String(priority) };
-    if (tags.length) headers.Tags = tags.join(',');
-    if (s.ntfyToken) headers.Authorization = `Bearer ${s.ntfyToken}`;
-    const r = await fetch(s.ntfyUrl, { method: 'POST', headers, body: message, signal: AbortSignal.timeout(10_000) });
-    return r.ok;
-  } catch (e) {
-    console.warn('ntfy failed:', e.message);
-    return false;
+  let ok = false;
+  if (s.ntfyUrl) {
+    try {
+      const headers = { Title: asciiHeader(title), Priority: String(priority) };
+      if (tags.length) headers.Tags = tags.join(',');
+      if (s.ntfyToken) headers.Authorization = `Bearer ${s.ntfyToken}`;
+      const r = await fetch(s.ntfyUrl, { method: 'POST', headers, body: message, signal: AbortSignal.timeout(10_000) });
+      ok = r.ok;
+    } catch (e) {
+      console.warn('ntfy failed:', e.message);
+    }
   }
+  const users = carId
+    ? db.all('SELECT owner_id AS id FROM cars WHERE id = ? UNION SELECT user_id AS id FROM car_shares WHERE car_id = ?', carId, carId)
+    : db.all('SELECT id FROM users WHERE is_admin = 1');
+  if (users.length) {
+    const subs = db.all(`SELECT * FROM push_subs WHERE user_id IN (${users.map(() => '?').join(',')})`, ...users.map((u) => u.id));
+    const subject = (process.env.ODC_PUBLIC_URL || '').startsWith('https://') ? process.env.ODC_PUBLIC_URL : 'mailto:noreply@opendashcam.invalid';
+    for (const sub of subs) {
+      try {
+        const alive = await sendPush(db, sub, { title, body: message, url, urgent: priority >= 4 }, subject);
+        if (!alive) db.run('DELETE FROM push_subs WHERE endpoint = ?', sub.endpoint);
+        else ok = true;
+      } catch (e) {
+        console.warn('push failed:', e.message);
+      }
+    }
+  }
+  return ok;
 }
 
 // HTTP header values must be ASCII; ntfy also reads RFC 2047, but plain ASCII keeps it simple.

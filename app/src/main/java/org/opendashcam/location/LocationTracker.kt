@@ -91,6 +91,7 @@ class LocationTracker(context: Context, settings: OdcSettings) {
 
     private fun onLocation(loc: Location) {
         lastLocation = loc
+        org.opendashcam.recording.ClockSync.fromGps(loc)
         val zone = zones.firstOrNull { z ->
             val d = FloatArray(1)
             Location.distanceBetween(loc.latitude, loc.longitude, z.lat, z.lon, d)

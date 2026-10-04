@@ -71,6 +71,7 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
         val privacyZone: String? = null,
         val motionEvents: Int = 0,
         val impacts: Int = 0,
+        val screenOffCheck: String? = null,
     ) {
         val active get() = status != Status.IDLE && status != Status.ERROR
     }
@@ -135,6 +136,47 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
     @Volatile private var running = false
     private var monitorsRegistered = false
     private var thermalListener: PowerManager.OnThermalStatusChangedListener? = null
+
+    // Screen-off check: frames encoded while the screen was off vs. expected.
+    private var screenOffAt = 0L
+    private var framesAtScreenOff = 0L
+    private var recorderGeneration = 0
+    private var generationAtScreenOff = -1
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val off = intent.action == Intent.ACTION_SCREEN_OFF
+            post { if (off) onScreenOff() else onScreenOn() }
+        }
+    }
+
+    private fun totalFrames(): Long = recorders.sumOf { it.encodedFrames }
+
+    private fun onScreenOff() {
+        screenOffAt = android.os.SystemClock.elapsedRealtime()
+        framesAtScreenOff = totalFrames()
+        generationAtScreenOff = recorderGeneration
+    }
+
+    /** At least 20 s off while recording steadily: did frames keep coming? */
+    private fun onScreenOn() {
+        val off = screenOffAt
+        screenOffAt = 0
+        if (off == 0L || recorders.isEmpty() || pausedReason != null || generationAtScreenOff != recorderGeneration) return
+        val durMs = android.os.SystemClock.elapsedRealtime() - off
+        if (durMs < 20_000) return
+        val p = recorders.first().profile
+        val perSecond = p.captureRate ?: p.fps.toDouble()
+        val expected = durMs / 1000.0 * perSecond * recorders.size
+        val got = totalFrames() - framesAtScreenOff
+        val pass = got >= expected * 0.5
+        settings.screenOffResult = if (pass) "pass" else "fail"
+        settings.screenOffCheckedAt = System.currentTimeMillis().toString()
+        val msg = if (pass) "Screen-off check passed: recording kept going for ${durMs / 1000} s with the screen off."
+        else "Screen-off check failed: recording stalled while the screen was off (${(100 * got / expected.coerceAtLeast(1.0)).toInt()}% of frames). Use dimmed-screen mode on this phone."
+        update { copy(screenOffCheck = msg) }
+        if (!pass) Notifier.alert(this, "Recording stalls with the screen off", "This phone stopped recording while the screen was off. Switch to dimmed-screen mode in Settings → Recording.")
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -252,12 +294,16 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
 
     private fun startRecorders() {
         if (!running) return
+        OverlayData.showSpeed = settings.overlaySpeed
+        OverlayData.showCoords = settings.overlayCoords
+        if (tracker == null) { OverlayData.speed = null; OverlayData.coords = null }
         val plan = ProfileBuilder.build(this, settings, caps, mode == Mode.PARKING, degraded, fallbackLevel)
         if (plan.streams.isEmpty()) {
             update { copy(status = Status.ERROR, message = "No usable camera was found on this phone.") }
             return
         }
         acquireWakeLock()
+        recorderGeneration++
         plan.streams.forEach { profile ->
             val r = CameraStreamRecorder(this, profile, storage, this)
             recorders += r
@@ -446,6 +492,10 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
     }
 
     private fun onFix(speedMps: Float?, zone: PrivacyZone?) {
+        // Burned-in stamp: speed and position, never inside a privacy zone.
+        val loc = tracker?.lastLocation
+        OverlayData.speed = if (zone == null) speedMps?.let { settings.formatSpeed(it) } else null
+        OverlayData.coords = if (zone == null && loc != null) String.format(Locale.US, "%.5f, %.5f", loc.latitude, loc.longitude) else null
         // Live position for the ODC Server map (never inside a privacy zone).
         if (zone == null && settings.gpsEnabled) {
             tracker?.lastLocation?.let { loc ->
@@ -605,6 +655,10 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
         }
         ContextCompat.registerReceiver(this, powerReceiver, powerFilter, ContextCompat.RECEIVER_NOT_EXPORTED)
         ContextCompat.registerReceiver(
+            this, screenReceiver, IntentFilter().apply { addAction(Intent.ACTION_SCREEN_OFF); addAction(Intent.ACTION_SCREEN_ON) },
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        ContextCompat.registerReceiver(
             this, batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED
         )
         val pm = getSystemService(PowerManager::class.java)
@@ -619,6 +673,7 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
         mainHandler.removeCallbacks(powerCheck)
         try { unregisterReceiver(powerReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(batteryReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
         thermalListener?.let { getSystemService(PowerManager::class.java).removeThermalStatusListener(it) }
         thermalListener = null
     }

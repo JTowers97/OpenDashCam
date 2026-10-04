@@ -76,7 +76,7 @@ internal object RemoteThumbs {
 
 /** Clips of this phone's car stored on the ODC Server. Needs a connection to the server. */
 @Composable
-fun ServerClipsScreen(settings: OdcSettings, onBack: () -> Unit, modifier: Modifier = Modifier) {
+fun ServerClipsScreen(settings: OdcSettings, onBack: () -> Unit, onOpenSync: (Long) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var clips by remember { mutableStateOf<List<JSONObject>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -119,14 +119,14 @@ fun ServerClipsScreen(settings: OdcSettings, onBack: () -> Unit, modifier: Modif
             clips == null -> Text("Loading…", modifier = Modifier.padding(top = 16.dp))
             clips!!.isEmpty() -> Text("No clips on the server yet.", modifier = Modifier.padding(top = 16.dp))
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-                items(clips!!, key = { it.getString("id") }) { c -> ServerClipRow(c) { play(c) } }
+                items(clips!!, key = { it.getString("id") }) { c -> ServerClipRow(c, onAllCameras = { onOpenSync(c.getLong("startedAt")) }) { play(c) } }
             }
         }
     }
 }
 
 @Composable
-private fun ServerClipRow(c: JSONObject, onPlay: () -> Unit) {
+private fun ServerClipRow(c: JSONObject, onAllCameras: () -> Unit, onPlay: () -> Unit) {
     val thumb by produceState<ImageBitmap?>(null, c.getString("id")) {
         value = if (c.optBoolean("encrypted")) null else RemoteThumbs.load(c.getString("thumbUrl"))
     }
@@ -156,6 +156,7 @@ private fun ServerClipRow(c: JSONObject, onPlay: () -> Unit) {
                     add(ClipStorage.formatBytes(c.optLong("size")))
                 }
                 Text(tags.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (!c.optBoolean("encrypted")) androidx.compose.material3.TextButton(onClick = onAllCameras) { Text("All cameras") }
             }
         }
     }

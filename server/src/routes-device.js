@@ -7,7 +7,7 @@ import { config } from './config.js';
 import { cameraFromRequest, normalizeCode, streamToken } from './auth.js';
 import { getSettings } from './db.js';
 import { HttpError, now, num, randomToken, readBody, readJson, send, sha256hex, str, uuid, bool } from './util.js';
-import { insertPoints, parseGpx, recordLive } from './tracks.js';
+import { insertPoints, parseGpx, recordLive, routePoints } from './tracks.js';
 import { placeName } from './geocode.js';
 import { notify } from './notify.js';
 
@@ -72,7 +72,7 @@ export function registerDeviceRoutes(router, app) {
        WHERE id = ?`,
       num(b.battery), bool(b.charging), num(b.thermal), storageFree, bool(b.recording), str(b.mode, 20), str(b.appVersion, 60), cam.id);
     if (storageFree != null && storageFree < 1024 ** 3 && (cam.storage_free == null || cam.storage_free >= 1024 ** 3)) {
-      notify(db, { title: `${cam.car_name} · ${cam.label}: phone storage low`, message: 'Less than 1 GB free on the phone.', tags: ['floppy_disk'] });
+      notify(db, { title: `${cam.car_name} · ${cam.label}: phone storage low`, message: 'Less than 1 GB free on the phone.', tags: ['floppy_disk'], carId: cam.car_id });
     }
     send(ctx.res, 200, { ok: true, now: now() });
   });
@@ -121,6 +121,7 @@ export function registerDeviceRoutes(router, app) {
         title: `${cam.car_name} · ${cam.label}: ${titles[type]}`,
         message: b.message ? String(b.message).slice(0, 500) : titles[type],
         priority: type === 'impact' ? 5 : 4,
+        carId: cam.car_id,
         tags: [type === 'impact' ? 'rotating_light' : 'warning'],
       });
     }
@@ -254,6 +255,26 @@ export function registerDeviceRoutes(router, app) {
       }
     }
     send(ctx.res, 200, { ok: true });
+  });
+
+  // ---- Synced playback in the app: all of this car's cameras over a time range, with stream links.
+  router.add('GET', '/api/v1/sync', (ctx) => {
+    const cam = requireCamera(ctx);
+    const from = Number(ctx.query.get('from'));
+    const to = Number(ctx.query.get('to')) || from + 20 * 60_000;
+    if (!from || to <= from || to - from > 12 * 3600_000) throw new HttpError(400, 'Choose a range up to 12 hours.');
+    const base = app.publicUrl(ctx.req);
+    const cameras = db.all('SELECT id, label FROM cameras WHERE car_id = ? ORDER BY created_at', cam.car_id);
+    const clips = db.all(`SELECT c.id, c.camera_id, c.started_at, c.duration_ms, c.codec FROM clips c
+      WHERE c.car_id = ? AND c.encrypted = 0 AND c.started_at BETWEEN ? AND ? ORDER BY c.started_at`,
+      cam.car_id, from - 10 * 60_000, to)
+      .filter((c) => c.started_at + (c.duration_ms || 180_000) >= from)
+      .map((c) => ({
+        id: c.id, cameraId: c.camera_id, startedAt: c.started_at, durationMs: c.duration_ms || 180_000, codec: c.codec,
+        streamUrl: `${base}/api/clips/${c.id}/stream?st=${streamToken(db, c.id)}`,
+      }));
+    const route = routePoints(db, cam.car_id, from, to);
+    send(ctx.res, 200, { cameras, clips, route: route.length > 3000 ? route.filter((_, i) => i % Math.ceil(route.length / 3000) === 0) : route, from, to });
   });
 
   // ---- Clips of this phone's car, for browsing in the app

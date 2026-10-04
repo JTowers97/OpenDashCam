@@ -67,6 +67,12 @@ class OdcSettings(context: Context) {
     var segmentMinutes by int("segment_minutes", 3)
     var displayMode by enumPref("display_mode", DisplayMode.DIM, DisplayMode.entries)
     var audioEnabled by bool("audio_enabled", false)
+    var overlayEnabled by bool("overlay_enabled", false)     // burned-in date/time stamp
+    /** Result of the latest screen-off check: "pass", "fail" or "" (not tested), and when ("" or epoch ms). */
+    var screenOffResult by string("screen_off_result", "")
+    var screenOffCheckedAt by string("screen_off_checked_at", "")
+    var overlaySpeed by bool("overlay_speed", true)
+    var overlayCoords by bool("overlay_coords", false)
     var audioDisclaimerAccepted by bool("audio_disclaimer_accepted", false)
 
     // Parking mode

@@ -67,7 +67,7 @@ private enum class MapRange(val label: String, val days: Int) { WEEK("7 days", 7
  * tap one to zoom in, tap a single clip to see it and play it.
  */
 @Composable
-fun ServerMapScreen(settings: OdcSettings, onBack: () -> Unit, modifier: Modifier = Modifier) {
+fun ServerMapScreen(settings: OdcSettings, onBack: () -> Unit, onOpenSync: (Long) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var all by remember { mutableStateOf<List<JSONObject>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -172,7 +172,7 @@ fun ServerMapScreen(settings: OdcSettings, onBack: () -> Unit, modifier: Modifie
                 mapRef.value = map to style
             }
             selected?.let { c ->
-                ClipCard(c, Modifier.align(Alignment.BottomCenter).padding(12.dp), onClose = { selected = null }) {
+                ClipCard(c, Modifier.align(Alignment.BottomCenter).padding(12.dp), onClose = { selected = null }, onAllCameras = { onOpenSync(c.getLong("startedAt")) }) {
                     if (c.optBoolean("encrypted")) {
                         Toast.makeText(context, "This clip is encrypted. Open it on the phone or with odc_decrypt.", Toast.LENGTH_LONG).show()
                     } else {
@@ -189,7 +189,7 @@ fun ServerMapScreen(settings: OdcSettings, onBack: () -> Unit, modifier: Modifie
 }
 
 @Composable
-private fun ClipCard(c: JSONObject, modifier: Modifier, onClose: () -> Unit, onPlay: () -> Unit) {
+private fun ClipCard(c: JSONObject, modifier: Modifier, onClose: () -> Unit, onAllCameras: () -> Unit, onPlay: () -> Unit) {
     val thumb by produceState<ImageBitmap?>(null, c.getString("id")) {
         value = if (c.optBoolean("encrypted")) null else RemoteThumbs.load(c.getString("thumbUrl"))
     }
@@ -207,6 +207,7 @@ private fun ClipCard(c: JSONObject, modifier: Modifier, onClose: () -> Unit, onP
                 )
                 Row {
                     Button(onClick = onPlay) { Text("Play") }
+                    if (!c.optBoolean("encrypted")) TextButton(onClick = onAllCameras) { Text("All cameras") }
                     TextButton(onClick = onClose) { Text("Close") }
                 }
             }

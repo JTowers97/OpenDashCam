@@ -1,0 +1,68 @@
+public class MuxTest {
+    // Split an Annex-B stream into access units using AUD NALs; return [frames, paramSets]
+    static java.util.List<byte[]> nals(byte[] d) { return FragmentedMp4Writer.splitAnnexB(d); }
+    public static void main(String[] a) throws Exception {
+        boolean hevc = a[0].equals("hevc");
+        String out = a[1];
+        double cutAt = a.length > 2 ? Double.parseDouble(a[2]) : 1.0; // simulate a crash at this fraction of frames
+        int rotation = a.length > 3 ? Integer.parseInt(a[3]) : 0;
+        boolean audio = a.length > 4 && a[4].equals("audio");
+        byte[] raw = java.nio.file.Files.readAllBytes(java.nio.file.Path.of(hevc ? "v.hevc" : "v.h264"));
+        java.util.List<byte[]> all = nals(raw);
+        java.util.List<byte[]> params = new java.util.ArrayList<>();
+        java.util.List<java.io.ByteArrayOutputStream> frames = new java.util.ArrayList<>();
+        java.util.List<Boolean> keys = new java.util.ArrayList<>();
+        java.io.ByteArrayOutputStream cur = null;
+        boolean curKey = false;
+        for (byte[] n : all) {
+            int type = hevc ? (n[0] >> 1) & 0x3F : n[0] & 0x1F;
+            boolean aud = hevc ? type == 35 : type == 9;
+            boolean ps = hevc ? (type >= 32 && type <= 34) : (type == 7 || type == 8);
+            if (ps) { if (params.size() < (hevc ? 3 : 2)) params.add(prefix(n)); }
+            if (aud) { if (cur != null) { frames.add(cur); keys.add(curKey); } cur = new java.io.ByteArrayOutputStream(); curKey = false; }
+            if (cur != null) { cur.write(prefix(n)); }
+            boolean key = hevc ? (type >= 16 && type <= 21) : type == 5;
+            if (key) curKey = true;
+        }
+        if (cur != null) { frames.add(cur); keys.add(curKey); }
+
+        FragmentedMp4Writer w = new FragmentedMp4Writer(new java.io.File(out));
+        int vt = w.addVideoTrack(hevc, 640, 360, rotation, params);
+        int at = -1;
+        java.util.List<byte[]> aac = new java.util.ArrayList<>();
+        if (audio) {
+            byte[] adts = java.nio.file.Files.readAllBytes(java.nio.file.Path.of("a.aac"));
+            int p = 0, srIdx = -1, ch = 1;
+            while (p + 7 <= adts.length) {
+                int len = ((adts[p + 3] & 3) << 11) | ((adts[p + 4] & 0xFF) << 3) | ((adts[p + 5] & 0xE0) >> 5);
+                boolean crc = (adts[p + 1] & 1) == 0;
+                srIdx = (adts[p + 2] >> 2) & 0xF; ch = ((adts[p + 2] & 1) << 2) | ((adts[p + 3] >> 6) & 3);
+                int h = crc ? 9 : 7;
+                aac.add(java.util.Arrays.copyOfRange(adts, p + h, p + len));
+                p += len;
+            }
+            int asc = (2 << 11) | (srIdx << 7) | (ch << 3);
+            at = w.addAudioTrack(48000, ch, new byte[] {(byte) (asc >> 8), (byte) asc});
+        }
+        w.start();
+        int n = (int) Math.round(frames.size() * cutAt);
+        int ai = 0;
+        for (int i = 0; i < n; i++) {
+            long pts = 1_000_000_000L + i * 1_000_000L / 30; // arbitrary start, like camera clocks
+            byte[] f = frames.get(i).toByteArray();
+            w.writeSample(vt, java.nio.ByteBuffer.wrap(f), f.length, pts, keys.get(i));
+            if (audio) {
+                while (ai < aac.size() && ai * 1024L * 1_000_000L / 48000 <= i * 1_000_000L / 30) {
+                    byte[] s = aac.get(ai);
+                    w.writeSample(at, java.nio.ByteBuffer.wrap(s), s.length, 1_000_000_000L + ai * 1024L * 1_000_000L / 48000, true);
+                    ai++;
+                }
+            }
+            if (w.pendingVideoKeyFrameAfterFirst()) w.flushFragment(false);
+        }
+        if (cutAt >= 1.0) w.close(); // a crash leaves the file without close()
+        else w.flushFragment(false);
+        System.out.println("frames written: " + n + " of " + frames.size() + (audio ? ", audio packets: " + ai : ""));
+    }
+    static byte[] prefix(byte[] n) { byte[] o = new byte[n.length + 4]; o[3] = 1; System.arraycopy(n, 0, o, 4, n.length); return o; }
+}

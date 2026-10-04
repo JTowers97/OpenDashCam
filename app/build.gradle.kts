@@ -17,7 +17,7 @@ android {
         val ciBuild = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
         val commit = System.getenv("GITHUB_SHA")?.take(7) ?: "local"
         versionCode = 1000 + (ciBuild ?: 0)
-        versionName = "0.8.0"
+        versionName = "0.9.0"
         buildConfigField("String", "BUILD_LABEL", "\"${ciBuild?.let { "build $it" } ?: "local build"} · $commit\"")
     }
 
@@ -31,6 +31,17 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        // Private release key, supplied only through environment variables (GitHub secrets in CI).
+        // Without them, release builds aren't signed and the debug build is used, as before.
+        val keystore = System.getenv("ODC_KEYSTORE_FILE")
+        if (keystore != null && file(keystore).exists()) {
+            create("release") {
+                storeFile = file(keystore)
+                storePassword = System.getenv("ODC_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ODC_KEY_ALIAS")
+                keyPassword = System.getenv("ODC_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -38,6 +49,7 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
         release {
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
@@ -70,7 +82,7 @@ android {
 
 base {
     // APK file name includes the version: OpenDashCam-0.4.0-debug.apk
-    archivesName.set("OpenDashCam-0.8.0")
+    archivesName.set("OpenDashCam-0.9.0")
 }
 
 dependencies {

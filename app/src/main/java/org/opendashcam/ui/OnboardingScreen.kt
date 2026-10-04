@@ -162,7 +162,11 @@ private fun DeviceCheckStep() {
     } ?: Body("Front camera: not found")
     Body("Front and rear at the same time: ${if (caps.supportsDual) "✓ supported" else "not supported"}")
     Body("H.265 (smaller files): ${if (caps.hevcEncoder) "✓ supported" else "not supported, H.264 will be used"}")
-    Hint("Screen-off recording works on most phones but some manufacturers stop it. ODC starts in dimmed-screen mode; switch to screen-off in Settings after you've tested a drive.")
+    var showTest by remember { mutableStateOf(false) }
+    Body("Screen-off recording: " + screenOffStatus(org.opendashcam.settings.OdcSettings(context)))
+    Hint("Some phones stop recording with the screen off. ODC starts in dimmed-screen mode; you can test screen-off now or any time later in Settings.")
+    OutlinedButton(onClick = { showTest = true }) { Text("Test screen-off recording now") }
+    if (showTest) ScreenOffTestDialog { showTest = false }
 }
 
 @Composable

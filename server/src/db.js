@@ -199,6 +199,15 @@ CREATE TABLE IF NOT EXISTS plate_aliases (
   to_plate TEXT NOT NULL
 );
 
+-- Browser notifications (Web Push subscriptions).
+CREATE TABLE IF NOT EXISTS push_subs (
+  endpoint TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS recovery_codes (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   code_hash TEXT NOT NULL,
@@ -218,6 +227,9 @@ const COLUMNS = [
   ['clips', 'plates_indexed', 'INTEGER NOT NULL DEFAULT 0'],
   ['plate_reads', 'box', 'TEXT'],           // [x1, y1, x2, y2] in the full-resolution frame
   ['plate_reads', 'corrected', 'INTEGER NOT NULL DEFAULT 0'],
+  ['cars', 'retention_days', 'INTEGER'],        // null = server default, 0 = keep forever
+  ['cars', 'storage_cap_gb', 'REAL'],           // null = no per-car limit
+  ['users', 'quota_gb', 'REAL'],                // null = no per-person limit (cars they own)
 ];
 
 export function openDb(dbPath) {

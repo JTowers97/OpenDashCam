@@ -182,6 +182,7 @@ class TrackingService : Service() {
     }
 
     private fun onFix(loc: Location) {
+        org.opendashcam.recording.ClockSync.fromGps(loc)
         _state.value = _state.value.copy(lastFixAt = System.currentTimeMillis())
         val inZone = settings.privacyZones.any { z ->
             val d = FloatArray(1)

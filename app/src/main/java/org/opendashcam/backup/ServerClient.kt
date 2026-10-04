@@ -28,7 +28,10 @@ class ServerClient(baseUrl: String, private val token: String?) {
     fun me(): JSONObject = json("GET", "/api/v1/devices/me", null)
 
     fun heartbeat(body: JSONObject) {
-        json("POST", "/api/v1/devices/me/heartbeat", body)
+        val t0 = System.currentTimeMillis()
+        val r = json("POST", "/api/v1/devices/me/heartbeat", body)
+        val t1 = System.currentTimeMillis()
+        if (r.has("now")) org.opendashcam.recording.ClockSync.fromServer(r.getLong("now"), t0, t1)
     }
 
     fun live(t: Long, lat: Double, lon: Double, speed: Float?, course: Float?, acc: Float?) {
@@ -44,7 +47,9 @@ class ServerClient(baseUrl: String, private val token: String?) {
         json("POST", "/api/v1/track", JSONObject().put("points", points))
     }
 
-    fun locatedClips(limit: Int = 1000): JSONArray =
+    fun sync(from: Long, to: Long): JSONObject = json("GET", "/api/v1/sync?from=$from&to=$to", null)
+
+        fun locatedClips(limit: Int = 1000): JSONArray =
         json("GET", "/api/v1/clips?located=1&limit=$limit", null).getJSONArray("clips")
 
     fun event(type: String, message: String, data: JSONObject = JSONObject()) {
