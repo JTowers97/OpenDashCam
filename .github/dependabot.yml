@@ -1,0 +1,21 @@
+# Free dependency alerts and weekly update pull requests (grouped to keep the noise down).
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: "/"
+    schedule: { interval: weekly }
+    groups:
+      android: { patterns: ["*"] }
+  - package-ecosystem: docker
+    directories: ["/server", "/server/ml"]
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: "/server/ml"
+    schedule: { interval: weekly }
+    groups:
+      ml: { patterns: ["*"] }
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
