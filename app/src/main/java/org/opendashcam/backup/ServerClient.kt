@@ -83,6 +83,18 @@ class ServerClient(baseUrl: String, private val token: String?, private val pin:
         return id
     }
 
+    /** An event with a photo (impact snapshot). */
+    fun eventWithPhoto(type: String, message: String, jpeg: ByteArray) {
+        val q = "type=" + java.net.URLEncoder.encode(type, "UTF-8") + "&message=" + java.net.URLEncoder.encode(message, "UTF-8") +
+            "&t=" + org.opendashcam.recording.ClockSync.now()
+        val c = open("POST", "/api/v1/events/snapshot?$q")
+        c.setRequestProperty("Content-Type", "image/jpeg")
+        c.doOutput = true
+        c.setFixedLengthStreamingMode(jpeg.size)
+        c.outputStream.use { it.write(jpeg) }
+        readResponse(c)
+    }
+
     fun sidecar(clipId: String, kind: String, bytes: ByteArray, encrypted: Boolean) {
         val c = open("POST", "/api/v1/clips/$clipId/sidecar?kind=$kind${if (encrypted) "&encrypted=1" else ""}")
         c.setRequestProperty("Content-Type", "application/octet-stream")

@@ -1,5 +1,6 @@
 package org.opendashcam.ui
 
+import androidx.compose.material3.OutlinedTextField
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
@@ -227,6 +228,22 @@ fun SettingsScreen(
                 onChange = { on -> set { settings.overlayCoords = on } },
                 subtitle = "Never shown inside privacy zones.",
             )
+            SwitchRow(
+                title = "Include your license plate",
+                checked = settings.overlayPlate,
+                onChange = { on -> set { settings.overlayPlate = on } },
+                subtitle = "Shows which car the footage came from, e.g. for insurance claims.",
+            )
+            if (settings.overlayPlate) {
+                var plate by remember { mutableStateOf(settings.ownPlate) }
+                OutlinedTextField(
+                    value = plate,
+                    onValueChange = { v -> plate = v.take(12); settings.ownPlate = plate },
+                    label = { Text("Your license plate") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
         SwitchRow(
             title = "Record audio",

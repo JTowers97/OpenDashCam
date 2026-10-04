@@ -66,4 +66,12 @@ object ServerReporter {
     fun event(context: Context, type: String, message: String) {
         submit(context) { it.event(type, message) }
     }
+
+    /** An event with a photo; falls back to a plain event if the photo can't be sent. */
+    fun eventWithPhoto(context: Context, type: String, message: String, jpeg: ByteArray?) {
+        submit(context) { c ->
+            if (jpeg == null) c.event(type, message)
+            else try { c.eventWithPhoto(type, message, jpeg) } catch (_: Exception) { c.event(type, message) }
+        }
+    }
 }

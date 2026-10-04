@@ -28,7 +28,7 @@ import org.opendashcam.recording.RecordingService
 import org.opendashcam.settings.OdcSettings
 import org.opendashcam.tracking.TrackingService
 
-enum class Screen { ONBOARDING, HOME, SETTINGS, CLIPS, PRIVACY_ZONES, SERVER_CLIPS, SERVER_MAP, SERVER_SYNC }
+enum class Screen { ONBOARDING, HOME, SETTINGS, CLIPS, PRIVACY_ZONES, SERVER_CLIPS, SERVER_MAP, SERVER_SYNC, PARKING }
 
 class MainActivity : ComponentActivity() {
     private lateinit var settings: OdcSettings
@@ -97,6 +97,7 @@ fun OdcRoot(settings: OdcSettings, autoStartRequests: Int) {
             Screen.SERVER_CLIPS -> serverClipsBack
             Screen.SERVER_MAP -> Screen.CLIPS
             Screen.SERVER_SYNC -> syncBack
+            Screen.PARKING -> Screen.HOME
             else -> Screen.HOME
         }
     }
@@ -111,7 +112,9 @@ fun OdcRoot(settings: OdcSettings, autoStartRequests: Int) {
                 autoStartRequests = autoStartRequests,
                 onOpenSettings = { screen = Screen.SETTINGS },
                 onOpenClips = { screen = Screen.CLIPS },
+                onOpenParking = { screen = Screen.PARKING },
             )
+            Screen.PARKING -> ParkingScreen(settings, onBack = { screen = Screen.HOME }, modifier = Modifier.safeDrawingPadding())
             Screen.SETTINGS -> SettingsScreen(
                 settings,
                 onBack = { screen = Screen.HOME },

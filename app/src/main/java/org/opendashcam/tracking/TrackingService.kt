@@ -190,6 +190,8 @@ class TrackingService : Service() {
             d[0] <= z.radiusM
         }
         if (inZone) return
+        // Tracking only updates while moving, so the latest fix is where the car stopped.
+        settings.parkedAt = "${loc.latitude},${loc.longitude},${System.currentTimeMillis()}"
         val p = JSONObject().put("t", loc.time).put("lat", loc.latitude).put("lon", loc.longitude)
         if (loc.hasSpeed()) p.put("speed", loc.speed.toDouble())
         if (loc.hasBearing()) p.put("course", loc.bearing.toDouble())

@@ -59,6 +59,11 @@ class CameraStreamRecorder(
         handler.post { openCamera() }
     }
 
+    /** Captures the next frame as a JPEG (null if not recording). */
+    fun requestSnapshot(callback: (ByteArray?) -> Unit) {
+        encoder?.requestSnapshot(callback) ?: callback(null)
+    }
+
     /** Flags the current clip as containing an event (used by impact detection). */
     fun markMotion() {
         motionInCurrent = true

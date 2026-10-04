@@ -246,6 +246,7 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
             return
         }
         running = false
+        saveParkingSpot()
         unregisterMonitors()
         stopSensors()
         mainHandler.removeCallbacks(heartbeatTick)
@@ -296,6 +297,7 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
         if (!running) return
         OverlayData.showSpeed = settings.overlaySpeed
         OverlayData.showCoords = settings.overlayCoords
+        OverlayData.plate = settings.ownPlate.trim().uppercase().takeIf { settings.overlayPlate && it.isNotEmpty() }
         if (tracker == null) { OverlayData.speed = null; OverlayData.coords = null }
         val plan = ProfileBuilder.build(this, settings, caps, mode == Mode.PARKING, degraded, fallbackLevel)
         if (plan.streams.isEmpty()) {
@@ -446,6 +448,15 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
         )
     }
 
+    /** Remembers the last GPS position as the parking spot ("Where did I park?"). Never inside a privacy zone. */
+    private fun saveParkingSpot() {
+        val t = tracker ?: return
+        val loc = t.lastLocation ?: return
+        if (t.currentZone != null) return
+        if (System.currentTimeMillis() - loc.time > 10 * 60_000) return // stale fix
+        settings.parkedAt = "${loc.latitude},${loc.longitude},${System.currentTimeMillis()}"
+    }
+
     private fun activePaths(): Set<String> = recorders.flatMap { it.activePaths() }.toSet()
 
     private fun writeSidecars(file: File, endTime: Long, timelapse: Boolean) {
@@ -537,7 +548,14 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
             lastFinished.remove(label)?.let { storage.lockFile(it, impact = true) }
         }
         update { copy(impacts = impacts + 1) }
-        ServerReporter.event(this, "impact", String.format(Locale.US, "%.1f g jolt; clips locked", g))
+        val message = String.format(Locale.US, "%.1f g jolt; clips locked", g)
+        if (settings.serverPaired) {
+            // Impact snapshot: the next frame from the main (road-facing) camera, sent with the alert. Gives up after 3 s.
+            val sent = java.util.concurrent.atomic.AtomicBoolean(false)
+            val send = { jpeg: ByteArray? -> if (sent.compareAndSet(false, true)) ServerReporter.eventWithPhoto(this, "impact", message, jpeg) }
+            recorders.first().requestSnapshot { jpeg -> send(jpeg) }
+            mainHandler.postDelayed({ send(null) }, 3000)
+        }
         Notifier.alert(
             this, "Impact detected",
             String.format(Locale.US, "A %.1f g jolt was detected. The clips before, during and after it are locked.", g),
@@ -583,6 +601,7 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
         }
         if (newMode != mode) {
             mode = newMode
+            if (newMode == Mode.PARKING) saveParkingSpot()
             update { copy(mode = newMode) }
             applyModeToSensors()
             if (!privacyBlocksParking()) restartRecorders()
@@ -702,6 +721,7 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
         val old = _state.value
         val new = old.transform()
         _state.value = new
+        if (old.active != new.active || old.mode != new.mode) org.opendashcam.widget.RecordingWidget.update(this)
         if (running && (old.status != new.status || old.mode != new.mode || old.streams != new.streams || old.message != new.message)) {
             val title = when (new.status) {
                 Status.RECORDING -> "Recording · ${new.mode.label}"

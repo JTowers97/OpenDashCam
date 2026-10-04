@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -41,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -123,6 +125,10 @@ fun ClipsScreen(
     var clips by remember { mutableStateOf(storage.allClips()) }
     var filter by remember { mutableStateOf(ClipFilter.ALL) }
     var confirmDelete by remember { mutableStateOf<Clip?>(null) }
+    // Bulk selection
+    var selecting by remember { mutableStateOf(false) }
+    val selected = remember { mutableStateListOf<String>() }
+    var confirmBulkDelete by remember { mutableStateOf(false) }
     val cryptoJob by ClipCrypto.job.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
@@ -211,11 +217,12 @@ fun ClipsScreen(
     Column(modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f)) { ScreenHeader("Clips", onBack) }
-            if (settings.serverPaired) {
+            TextButton(onClick = { selecting = !selecting; selected.clear() }) { Text(if (selecting) "Done" else "Select") }
+            if (settings.serverPaired && !selecting) {
                 TextButton(onClick = onOpenMap) { Text("Map") }
                 TextButton(onClick = onOpenServerClips) { Text("On server") }
             }
-            if (settings.smbEnabled || settings.serverPaired) {
+            if ((settings.smbEnabled || settings.serverPaired) && !selecting) {
                 OutlinedButton(onClick = { BackupScheduler.kick(context, replace = true) }) {
                     Text(if (backup.running) "Backing up… ${(backup.progress * 100).toInt()}%" else "Back up now")
                 }
@@ -250,6 +257,31 @@ fun ClipsScreen(
                 if (encryptable.isNotEmpty()) {
                     TextButton(onClick = { confirmEncryptAll = encryptable }) {
                         Text("Encrypt ${if (filter == ClipFilter.ALL) "all" else "these"} (${encryptable.size})")
+                    }
+                }
+            }
+        }
+
+        if (selecting) {
+            val picked = shown.filter { it.file.absolutePath in selected && it.file.absolutePath !in state.activeFiles }
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    Text(
+                        if (picked.isEmpty()) "Tap clips to select them" else "${picked.size} selected · ${ClipStorage.formatBytes(picked.sumOf { it.sizeBytes })}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    FlowRow {
+                        TextButton(onClick = {
+                            selected.clear()
+                            selected.addAll(shown.filter { it.file.absolutePath !in state.activeFiles }.map { it.file.absolutePath })
+                        }) { Text("Select all") }
+                        TextButton(enabled = picked.isNotEmpty(), onClick = { picked.filter { !it.locked }.forEach { storage.lock(it) }; selected.clear(); refresh() }) { Text("Lock") }
+                        TextButton(enabled = picked.isNotEmpty(), onClick = { picked.filter { it.locked }.forEach { storage.unlock(it) }; selected.clear(); refresh() }) { Text("Unlock") }
+                        if (settings.smbEnabled || settings.serverPaired) {
+                            TextButton(enabled = picked.isNotEmpty(), onClick = { picked.forEach { storage.setKeep(it, true) }; selected.clear(); refresh() }) { Text("Keep on phone") }
+                        }
+                        TextButton(enabled = picked.any { !it.encrypted } && !cryptoJob.running, onClick = { encrypt(picked.filter { !it.encrypted }); selected.clear() }) { Text("Encrypt") }
+                        TextButton(enabled = picked.isNotEmpty(), onClick = { confirmBulkDelete = true }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                     }
                 }
             }
@@ -292,6 +324,12 @@ fun ClipsScreen(
                             if (clip.encrypted) withPassphrase(clip, "decrypt") else encrypt(listOf(clip))
                         },
                         busy = cryptoJob.running,
+                        selectMode = selecting,
+                        isSelected = clip.file.absolutePath in selected,
+                        onToggleSelect = {
+                            val key = clip.file.absolutePath
+                            if (key in selected) selected.remove(key) else selected.add(key)
+                        },
                     )
                 }
             }
@@ -339,6 +377,30 @@ fun ClipsScreen(
 
     opening?.let { ProgressDialog("Decrypting clip…", it) }
 
+    if (confirmBulkDelete) {
+        val picked = clips.filter { it.file.absolutePath in selected && it.file.absolutePath !in state.activeFiles }
+        AlertDialog(
+            onDismissRequest = { confirmBulkDelete = false },
+            title = { Text("Delete ${picked.size} clips?") },
+            text = {
+                Text(
+                    "They're removed from this phone, including locked ones" +
+                        (if (picked.any { !it.backedUp } && (settings.smbEnabled || settings.serverPaired)) ", and ${picked.count { !it.backedUp }} aren't backed up yet" else "") +
+                        ". Backed-up copies aren't affected."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    picked.forEach { storage.delete(it) }
+                    selected.clear()
+                    confirmBulkDelete = false
+                    refresh()
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmBulkDelete = false }) { Text("Cancel") } },
+        )
+    }
+
     confirmDelete?.let { clip ->
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
@@ -377,22 +439,30 @@ private fun ClipRow(
     onDelete: () -> Unit,
     onToggleEncryption: () -> Unit,
     busy: Boolean,
+    selectMode: Boolean = false,
+    isSelected: Boolean = false,
+    onToggleSelect: () -> Unit = {},
 ) {
     val thumb by produceState<ImageBitmap?>(null, clip.file.absolutePath, inProgress) {
         value = if (inProgress || clip.encrypted) null else Thumbnails.load(clip.file)
     }
     Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        modifier = Modifier.fillMaxWidth().then(if (selectMode && !inProgress) Modifier.clickable(onClick = onToggleSelect) else Modifier),
     ) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (selectMode) {
+                Checkbox(checked = isSelected, onCheckedChange = { onToggleSelect() }, enabled = !inProgress)
+            }
             Box(
                 Modifier
                     .width(144.dp)
                     .height(81.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color.Black)
-                    .clickable(enabled = !inProgress, onClick = onPlay),
+                    .clickable(enabled = !inProgress, onClick = if (selectMode) onToggleSelect else onPlay),
                 contentAlignment = Alignment.Center,
             ) {
                 val t = thumb
@@ -422,7 +492,7 @@ private fun ClipRow(
                 Text(tags.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (inProgress) {
                     Text("Recording…", style = MaterialTheme.typography.bodySmall, color = OdcRed, modifier = Modifier.padding(top = 8.dp))
-                } else {
+                } else if (!selectMode) {
                     FlowRow {
                         TextButton(onClick = onToggleLock) { Text(if (clip.locked) "Unlock" else "Lock") }
                         if (showBackup) TextButton(onClick = onToggleKeep) { Text(if (clip.keep) "Allow removal" else "Keep on phone") }

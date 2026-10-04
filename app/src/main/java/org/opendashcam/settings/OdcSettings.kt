@@ -68,11 +68,17 @@ class OdcSettings(context: Context) {
     var displayMode by enumPref("display_mode", DisplayMode.DIM, DisplayMode.entries)
     var audioEnabled by bool("audio_enabled", false)
     var overlayEnabled by bool("overlay_enabled", false)     // burned-in date/time stamp
+    /** Where the car was parked: "lat,lon,epochMs" or "" (saved when parking mode starts or recording stops). */
+    var parkedAt by string("parked_at", "")
+
     /** Result of the latest screen-off check: "pass", "fail" or "" (not tested), and when ("" or epoch ms). */
     var screenOffResult by string("screen_off_result", "")
     var screenOffCheckedAt by string("screen_off_checked_at", "")
     var overlaySpeed by bool("overlay_speed", true)
     var overlayCoords by bool("overlay_coords", false)
+    var overlayPlate by bool("overlay_plate", false)
+    /** Your own car's license plate, shown in the stamp if overlayPlate is on. */
+    var ownPlate by string("own_plate", "")
     var audioDisclaimerAccepted by bool("audio_disclaimer_accepted", false)
 
     // Parking mode

@@ -120,6 +120,10 @@ class SegmentEncoder(
         return cameraSurface
     }
 
+    fun requestSnapshot(callback: (ByteArray?) -> Unit) {
+        renderer?.requestSnapshot(callback) ?: callback(null)
+    }
+
     /** Finishes the current clip cleanly and releases everything. Blocks up to a few seconds. */
     fun stop() {
         if (stopping) return

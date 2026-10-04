@@ -65,6 +65,12 @@ class OverlayRenderer(
     private val stMatrix = FloatArray(16)
     private var stampVerts: FloatBuffer? = null
     private var lastSecond = -1L
+    @Volatile private var snapshotRequest: ((ByteArray?) -> Unit)? = null
+
+    /** Captures the next frame (with the stamp, upright) as a JPEG up to 1280 px wide. Callback runs on a background thread. */
+    fun requestSnapshot(callback: (ByteArray?) -> Unit) {
+        snapshotRequest = callback
+    }
     private val fullQuad = makeFullQuad() // per renderer: each camera draws on its own thread
     @Volatile private var released = false
 
@@ -203,6 +209,12 @@ class OverlayRenderer(
                 GLES20.glDisable(GLES20.GL_BLEND)
             }
 
+            snapshotRequest?.let { cb ->
+                snapshotRequest = null
+                val buf = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
+                GLES20.glReadPixels(0, 0, width, height, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
+                Thread { cb(encodeSnapshot(buf)) }.start()
+            }
             EGLExt.eglPresentationTimeANDROID(display, eglSurface, pts)
             EGL14.eglSwapBuffers(display, eglSurface)
             onFrame()
@@ -295,6 +307,28 @@ class OverlayRenderer(
             data[i * 4 + 3] = c[3]
         }
         stampVerts = floatBuffer(data)
+    }
+
+    /** GL rows are bottom-up; flip, turn upright (as players would), shrink and compress. */
+    private fun encodeSnapshot(buf: ByteBuffer): ByteArray? = try {
+        buf.rewind()
+        val raw = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        raw.copyPixelsFromBuffer(buf)
+        val upright = Bitmap.createBitmap(raw, 0, 0, width, height, android.graphics.Matrix().apply {
+            postScale(1f, -1f)
+            postRotate(rotation.toFloat())
+        }, true)
+        raw.recycle()
+        val scale = minOf(1f, 1280f / maxOf(upright.width, upright.height))
+        val small = if (scale < 1f) Bitmap.createScaledBitmap(upright, (upright.width * scale).toInt(), (upright.height * scale).toInt(), true) else upright
+        val out = java.io.ByteArrayOutputStream()
+        small.compress(Bitmap.CompressFormat.JPEG, 80, out)
+        if (small !== upright) small.recycle()
+        upright.recycle()
+        out.toByteArray()
+    } catch (e: Exception) {
+        Log.w(TAG, "snapshot failed: ${e.message}")
+        null
     }
 
     /** Players rotate the encoded frame clockwise by [rotation]; this undoes that for a point in the viewed picture. */

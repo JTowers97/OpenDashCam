@@ -8,12 +8,14 @@ import java.util.Locale
 object OverlayData {
     @Volatile var showSpeed = true
     @Volatile var showCoords = false
+    @Volatile var plate: String? = null       // your own plate, if shown
     @Volatile var speed: String? = null     // null: no GPS, or inside a privacy zone
     @Volatile var coords: String? = null
 
     /** Lines for the given time. Each renderer calls this on its own thread, so the formatter is per call site. */
     fun lines(timeMs: Long, format: SimpleDateFormat): List<String> {
         val first = buildString {
+            plate?.let { append(it).append("   ") }
             append(format.format(Date(timeMs)))
             if (showSpeed) speed?.let { append("   ").append(it) }
         }

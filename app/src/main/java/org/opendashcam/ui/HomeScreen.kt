@@ -37,6 +37,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -73,6 +74,7 @@ fun HomeScreen(
     autoStartRequests: Int,
     onOpenSettings: () -> Unit,
     onOpenClips: () -> Unit,
+    onOpenParking: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -205,6 +207,9 @@ fun HomeScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(onClick = onOpenClips, modifier = Modifier.weight(1f)) { Text("Clips") }
                     OutlinedButton(onClick = onOpenSettings, modifier = Modifier.weight(1f)) { Text("Settings") }
+                }
+                if (!active && parkingSpot(settings) != null) {
+                    TextButton(onClick = onOpenParking) { Text("Where I parked") }
                 }
 
                 val tracking by TrackingService.state.collectAsStateWithLifecycle()
