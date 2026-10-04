@@ -78,6 +78,8 @@ Free and open source. No accounts, no cloud, no ads, no tracking.
 - A **getting-started checklist** for new installs
 - **Arrival alerts** at places you mark on the map, **speed alerts**, and **impact alerts with a photo**
 - Optional **driving events**: hard braking, hard acceleration and sharp turns, on trips and in Events
+- **Home Assistant integration** (MQTT): each car's location, speed, recording status and alerts
+- **Viofo dashcam import:** recordings (with GPS) from Viofo cameras on your Wi-Fi, alongside phone footage
 - **Expiring share links** and **incident reports** (all cameras, route map, speed graph, notes), with
   optional blurring of license plates and faces done on your server
 - Sharing with family members, two-factor sign-in, signed-in devices, an activity log, daily database
@@ -171,9 +173,6 @@ Planned features, in no particular order:
 
 - **Live view on demand:** look through a car's camera from the ODC Server (for example after an impact
   alert while parked)
-- **Home Assistant integration:** car location, presence and alerts in Home Assistant
-- **Viofo dashcam import:** Viofo cameras on your home Wi-Fi sync their recordings (with GPS) to the ODC
-  Server automatically, alongside phone footage
 - **App lock (optional):** require your fingerprint, face or screen lock to open clips and settings
 - **Custom themes (optional):** choose colors and light/dark appearance in the app and the web app
 - **Accessibility settings (optional):** larger text and controls, higher contrast, and screen reader support

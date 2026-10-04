@@ -1,5 +1,12 @@
 # Changelog
 
+## Server 1.4.0 (app 1.4.0: no changes, version aligned)
+- **Server:** Home Assistant integration over MQTT with discovery: each car's location tracker, speed,
+  last seen, phone battery, recording and moving, plus an alert event entity
+- **Server:** Viofo dashcam import over Wi-Fi: newest first, resumable downloads, separate cameras per lens,
+  event recordings locked, parking recordings marked, GPS read from the video (ExifTool, now in the image)
+- **Server:** the car position now carries the GPS accuracy (used by Home Assistant zones)
+
 ## App 1.3.0 · Server 1.3.0
 - **Server:** arrival alerts: draw places on the Map and get notified when a car arrives or leaves (with a
   margin so GPS jitter at the edge doesn't cause repeat alerts)
