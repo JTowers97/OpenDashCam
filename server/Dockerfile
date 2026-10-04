@@ -1,5 +1,5 @@
 # Open Dash Cam server: one container, no external database.
-FROM node:22-alpine
+FROM node:26-alpine
 
 # ffmpeg: thumbnails, video info, H.265 -> H.264 conversion. tini: clean shutdown.
 # exiftool reads GPS embedded in dashcam videos (Viofo import)
