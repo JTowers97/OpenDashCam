@@ -7,13 +7,16 @@ ENV PIP_NO_CACHE_DIR=1 \
     SENTENCE_TRANSFORMERS_HOME=/cache \
     PORT=3003
 
+# ffmpeg decodes and re-encodes video for plate/face blurring.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+
 # CPU-only PyTorch keeps the image far smaller than the default GPU build.
 RUN pip install torch --index-url https://download.pytorch.org/whl/cpu
 COPY requirements.txt /app/requirements.txt
 RUN pip install -r /app/requirements.txt
 
 WORKDIR /app
-COPY app.py .
+COPY app.py blur.py ./
 
 VOLUME /cache
 EXPOSE 3003

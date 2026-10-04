@@ -10,6 +10,7 @@ import { HttpError, now, num, randomToken, readBody, readJson, send, sha256hex, 
 import { insertPoints, parseGpx, recordLive, routePoints } from './tracks.js';
 import { placeName } from './geocode.js';
 import { audit } from './audit.js';
+import { snapshotPath } from './snapshots.js';
 import { notify } from './notify.js';
 
 const API_VERSIONS = [1];
@@ -106,6 +107,37 @@ export function registerDeviceRoutes(router, app) {
     send(ctx.res, 200, { ok: true, accepted: pts.length });
   });
 
+  // ---- An event with a photo (impact snapshots): body is a JPEG; type/message/t in the query.
+  router.add('POST', '/api/v1/events/snapshot', async (ctx) => {
+    const cam = requireCamera(ctx);
+    const type = str(ctx.query.get('type'), 30) || 'impact';
+    const message = str(ctx.query.get('message'), 300) || '';
+    const t = ctx.query.get('t') ? (num(ctx.query.get('t')) || now()) : now();
+    const chunks = [];
+    let size = 0;
+    for await (const c of ctx.req) {
+      size += c.length;
+      if (size > 3 * 1024 * 1024) throw new HttpError(413, 'Snapshot too large');
+      chunks.push(c);
+    }
+    const jpeg = Buffer.concat(chunks);
+    if (jpeg.length < 100 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) throw new HttpError(400, 'Expected a JPEG image');
+    const r = db.run('INSERT INTO events(car_id, camera_id, type, t, data) VALUES (?, ?, ?, ?, ?)',
+      cam.car_id, cam.id, type, t, JSON.stringify({ message, snapshot: true }));
+    const id = Number(r.lastInsertRowid);
+    const file = snapshotPath(id);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, jpeg);
+    const titles = { impact: 'Impact detected' };
+    const image = `${app.publicUrl(ctx.req)}/api/snapshots/${id}?st=${streamToken(db, `snap-${id}`, 7 * 86400_000)}`;
+    notify(db, {
+      title: `${cam.car_name} · ${cam.label}: ${titles[type] || type}`,
+      message: message || 'See the photo.',
+      tags: ['rotating_light'], priority: type === 'impact' ? 5 : 4, carId: cam.car_id, image,
+    });
+    send(ctx.res, 201, { id });
+  });
+
   // ---- Events reported by the phone (impact, overheating, ...)
   router.add('POST', '/api/v1/events', async (ctx) => {
     const cam = requireCamera(ctx);
@@ -113,7 +145,7 @@ export function registerDeviceRoutes(router, app) {
     const type = str(b.type, 30) || 'event';
     const t = num(b.t) ?? now();
     db.run('INSERT INTO events(car_id, camera_id, type, t, data) VALUES (?, ?, ?, ?, ?)',
-      cam.car_id, cam.id, type, t, JSON.stringify(b.data ?? {}));
+      cam.car_id, cam.id, type, t, JSON.stringify({ ...(b.data && typeof b.data === 'object' ? b.data : {}), ...(b.message ? { message: str(b.message, 300) } : {}) }));
     const titles = {
       impact: 'Impact detected',
       overheating: 'Phone overheating',

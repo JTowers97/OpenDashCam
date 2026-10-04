@@ -19,7 +19,9 @@ export class Router {
 
   match(method, path) {
     let pathMatched = false;
-    for (const r of this.routes) {
+    // Exact paths win over ones with :params (so /api/clips/calendar isn't read as clip "calendar").
+    const ordered = [...this.routes.filter((r) => !r.keys.length), ...this.routes.filter((r) => r.keys.length)];
+    for (const r of ordered) {
       const m = r.regex.exec(path);
       if (!m) continue;
       pathMatched = true;

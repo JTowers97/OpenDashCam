@@ -17,6 +17,8 @@ import { loadTls } from './tls.js';
 import { httpsRedirect, securityHeaders } from './headers.js';
 import { maybeBackup } from './backup.js';
 import { purgeAudit } from './audit.js';
+import { deleteShareFiles, purgeExpiredShares } from './shares.js';
+import { cleanReports } from './reports.js';
 import { notify } from './notify.js';
 
 for (const d of [config.dataDir, config.libraryDir, config.uploadsDir, config.cacheDir]) fs.mkdirSync(d, { recursive: true });
@@ -62,6 +64,7 @@ const app = {
 
   deleteClipFiles(clip) {
     forgetClip(clip.id);
+    deleteShareFiles(db, clip.id);
     fs.rmSync(path.join(config.cacheDir, 'decrypted', `${clip.id}.mp4`), { force: true });
     const base = clip.path.replace(/\.(mp4|odcenc)$/, '');
     for (const f of [clip.path, `${base}.gpx`, `${base}.srt`, `${base}.gpx.odcenc`, `${base}.srt.odcenc`, thumbPath(clip.id), h264Path(clip.id)]) {
@@ -213,6 +216,8 @@ every(3600_000, () => { enforceRetention(); cleanUploads(); learnAllPlaces(); pu
 every(10 * 60_000, cleanDecrypted);
 every(3600_000, () => {
   purgeAudit(db, getSettings(db).auditRetentionDays);
+  purgeExpiredShares(db);
+  cleanReports();
   const b = maybeBackup(db, config.dataDir);
   if (b) console.log('Database backup written:', b);
 });
@@ -272,7 +277,7 @@ async function handle(req, res) {
   if (httpsRedirect(db, req, res, secure, config.httpsPort)) return;
   const ip = config.trustProxy ? (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress : req.socket.remoteAddress;
   try {
-    if (!url.pathname.startsWith('/api/')) return serveStatic(req, res, url.pathname);
+    if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/s/')) return serveStatic(req, res, url.pathname);
     // Android's HttpURLConnection can't send PATCH; it sends POST + X-HTTP-Method-Override (as tus allows).
     const override = String(req.headers['x-http-method-override'] || '').toUpperCase();
     const method = req.method === 'POST' && ['PATCH', 'DELETE'].includes(override) ? override : req.method;

@@ -73,6 +73,15 @@ export async function transcodeH264(file, clipId) {
   return out;
 }
 
+/** Cuts [startS, endS] out of a clip without re-encoding (cuts land on the nearest keyframes, about a second apart). */
+export async function trimClip(file, startS, endS, out) {
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  await run(config.ffmpeg, [
+    '-y', '-v', 'error', '-ss', String(Math.max(0, startS)), '-i', file, '-t', String(Math.max(0.5, endS - startS)),
+    '-map', '0', '-c', 'copy', '-movflags', '+faststart', '-f', 'mp4', out,
+  ], 5 * 60_000);
+}
+
 /** A tiny sequential job queue so heavy ffmpeg work never runs many at once. */
 export class JobQueue {
   constructor(concurrency = 1) {

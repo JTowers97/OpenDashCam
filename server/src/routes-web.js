@@ -14,7 +14,14 @@ import { vapidKeys } from './webpush.js';
 import { audit } from './audit.js';
 import { listBackups, runBackup, backupDir } from './backup.js';
 import { currentSessionHash, sessionId } from './auth.js';
+import { writeZip, ZIP_LIMIT } from './zip.js';
+import { trimClip } from './media.js';
+import { randomToken, sha256hex as hashOf } from './util.js';
+import crypto from 'node:crypto';
 import { WrongPassphrase, decryptFile } from './crypto-odcenc.js';
+import { registerShareRoutes } from './shares.js';
+import { registerReportRoutes } from './reports.js';
+import { snapshotPath } from './snapshots.js';
 import { indexerState, indexStats, mlHealth, resetIndex, runIndexer, visualSearch } from './search.js';
 import {
   erasePlates, mergePlates, normalizePlate, plateCrop, plateLog, plateStats, purgeOldPlates, runPlateIndexer, searchPlates, similarPlates,
@@ -354,7 +361,7 @@ export function registerWebRoutes(router, app) {
     return {
       id: car.id, name: car.name, owner: owner?.username, role: carRole(db, user, car.id),
       mismatchPolicy: car.mismatch_policy, truthCameraId: car.truth_camera_id,
-      retentionDays: car.retention_days, storageCapGb: car.storage_cap_gb,
+      retentionDays: car.retention_days, storageCapGb: car.storage_cap_gb, speedAlertKmh: car.speed_alert_kmh,
       cameras, shares, clipCount: stats.n, clipBytes: stats.bytes, lastClipAt: stats.last,
       live: carLive(db, car),
     };
@@ -387,6 +394,11 @@ export function registerWebRoutes(router, app) {
     if (b.mismatchPolicy !== undefined) {
       if (!['alert', 'source', 'average'].includes(b.mismatchPolicy)) throw new HttpError(400, 'Invalid policy');
       db.run('UPDATE cars SET mismatch_policy = ? WHERE id = ?', b.mismatchPolicy, id);
+    }
+    if (b.speedAlertKmh !== undefined) {
+      const v = b.speedAlertKmh === null || b.speedAlertKmh === '' || Number(b.speedAlertKmh) <= 0 ? null : Math.min(400, Number(b.speedAlertKmh));
+      db.run('UPDATE cars SET speed_alert_kmh = ? WHERE id = ?', v, id);
+      audit(db, { user: u, action: 'speed alert changed', target: db.get('SELECT name FROM cars WHERE id = ?', id)?.name, ip: ctx.ip, detail: v == null ? 'off' : `${v} km/h` });
     }
     if (b.retentionDays !== undefined) {
       const v = b.retentionDays === null || b.retentionDays === '' ? null : Math.max(0, Math.round(Number(b.retentionDays) || 0));
@@ -494,7 +506,7 @@ export function registerWebRoutes(router, app) {
     fileName: c.file_name, startedAt: c.started_at, durationMs: c.duration_ms, size: c.size, sha256: c.sha256,
     codec: c.codec, width: c.width, height: c.height, fps: c.fps, mode: c.mode, locked: !!c.locked,
     lockReason: c.lock_reason, encrypted: !!c.encrypted, hasTrack: !!c.has_track, hasThumb: !!c.has_thumb,
-    lat: c.lat, lon: c.lon, place: c.place,
+    lat: c.lat, lon: c.lon, place: c.place, trimmedFrom: c.trimmed_from,
   });
 
   const CLIP_SELECT = `SELECT c.*, k.name AS car_name, m.label AS camera_label FROM clips c
@@ -654,7 +666,10 @@ export function registerWebRoutes(router, app) {
     requireCarRole(db, u, t.car_id);
     const clips = db.all(`${CLIP_SELECT} WHERE c.car_id = ? AND c.started_at BETWEEN ? AND ? ORDER BY c.started_at`,
       t.car_id, t.start_t - 10 * 60_000, t.end_t).map(clipView);
-    send(ctx.res, 200, { ...tripView(t), route: simplify(routePoints(db, t.car_id, t.start_t, t.end_t), 3000), clips });
+    const drivingEvents = db.all(`SELECT id, type, t, data FROM events WHERE car_id = ? AND t BETWEEN ? AND ?
+      AND type IN ('hard_brake', 'hard_accel', 'sharp_turn', 'speeding', 'impact') ORDER BY t`, t.car_id, t.start_t, t.end_t)
+      .map((e) => ({ id: e.id, type: e.type, t: e.t, data: safeJson(e.data) }));
+    send(ctx.res, 200, { ...tripView(t), route: simplify(routePoints(db, t.car_id, t.start_t, t.end_t), 3000), clips, events: drivingEvents });
   });
 
   router.add('PATCH', '/api/trips/:id', async (ctx) => {
@@ -732,6 +747,201 @@ export function registerWebRoutes(router, app) {
       .filter((c) => c.startedAt + (c.durationMs || 180_000) >= from);
     send(ctx.res, 200, { cameras, clips, route: simplify(routePoints(db, id, from, to), 4000), from, to });
   });
+
+  // ---------------------------------------------------------------- setup checklist
+
+  router.add('GET', '/api/checklist', async (ctx) => {
+    const u = requireUser(ctx);
+    const s = getSettings(db);
+    const cars = visibleCarIds(db, u);
+    const ph = cars.map(() => '?').join(',') || 'NULL';
+    const has = (sql, ...p) => !!db.get(sql, ...p);
+    const secureNow = !!ctx.req.socket.encrypted || ctx.req.headers['x-forwarded-proto'] === 'https';
+    const items = [
+      { key: 'car', title: 'Add a car', done: cars.length > 0, link: '#/cars' },
+      { key: 'phone', title: 'Connect a phone', hint: 'Cars → Connect a phone, then scan the code in ODC on the phone.', done: has(`SELECT 1 FROM cameras WHERE car_id IN (${ph})`, ...cars), link: '#/cars' },
+      { key: 'clip', title: 'Receive the first clip', hint: 'Phones upload on Wi-Fi once backup to the server is on (ODC → Settings → ODC Server).', done: has(`SELECT 1 FROM clips WHERE car_id IN (${ph})`, ...cars), link: '#/timeline' },
+      { key: 'gps', title: 'Turn on GPS logging', hint: 'ODC → Settings → Location. Needed for the map, trips and place names.', done: has(`SELECT 1 FROM points WHERE car_id IN (${ph}) LIMIT 1`, ...cars), link: '#/map' },
+      { key: 'alerts', title: 'Get alerts', hint: 'Turn on notifications in this browser, or set up ntfy (Settings).', done: !!s.ntfyUrl || has('SELECT 1 FROM push_subs WHERE user_id = ?', u.id), link: '#/settings' },
+      { key: 'twofa', title: 'Turn on two-factor sign-in', hint: 'Recommended if the server is reachable from the internet.', done: !!db.get('SELECT totp_enabled FROM users WHERE id = ?', u.id)?.totp_enabled, link: '#/settings' },
+      { key: 'https', title: 'Use HTTPS', hint: 'See the server README: automatic Let’s Encrypt certificates or the built-in HTTPS.', done: secureNow || (process.env.ODC_PUBLIC_URL || '').startsWith('https://'), link: '#/settings' },
+    ];
+    if (u.isAdmin) items.push({ key: 'backups', title: 'Database backups on', hint: 'Settings → Database backups. Copy the backups folder to another disk too.', done: s.backupEnabled, link: '#/settings' });
+    send(ctx.res, 200, items);
+  });
+
+  // ---------------------------------------------------------------- calendar, bulk actions, downloads, trimming
+
+  /** Footage per day for a month: { "2026-10-03": { count, bytes, impact, locked } }. Days are in the server's time zone. */
+  router.add('GET', '/api/clips/calendar', (ctx) => {
+    const u = requireUser(ctx);
+    const cars = visibleCarIds(db, u);
+    const month = String(ctx.query.get('month') || new Date().toISOString().slice(0, 7));
+    if (!/^\d{4}-\d{2}$/.test(month)) throw new HttpError(400, 'month must look like 2026-10');
+    const [y, m] = month.split('-').map(Number);
+    const from = new Date(y, m - 1, 1).getTime();
+    const to = new Date(y, m, 1).getTime();
+    const out = {};
+    if (cars.length) {
+      const params = [...cars, from, to];
+      let carFilter = '';
+      if (ctx.query.get('car')) { carFilter = ' AND car_id = ?'; params.push(Number(ctx.query.get('car'))); }
+      for (const c of db.all(`SELECT started_at, size, locked, lock_reason FROM clips WHERE car_id IN (${cars.map(() => '?').join(',')})
+          AND started_at >= ? AND started_at < ?${carFilter}`, ...params)) {
+        const d = new Date(c.started_at);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const e = (out[key] ||= { count: 0, bytes: 0, impact: false, locked: 0 });
+        e.count++;
+        e.bytes += c.size;
+        if (c.locked) e.locked++;
+        if (c.lock_reason === 'impact') e.impact = true;
+      }
+    }
+    send(ctx.res, 200, { month, days: out });
+  });
+
+  router.add('POST', '/api/clips/bulk', async (ctx) => {
+    const u = requireUser(ctx);
+    const b = await readJson(ctx.req);
+    const ids = (Array.isArray(b.ids) ? b.ids : []).slice(0, 2000).map(String);
+    if (!['lock', 'unlock', 'delete'].includes(b.action)) throw new HttpError(400, 'action must be lock, unlock or delete');
+    let done = 0;
+    let skipped = 0;
+    for (const id of ids) {
+      const c = db.get(`${CLIP_SELECT} WHERE c.id = ?`, id);
+      const role = c && carRole(db, u, c.car_id);
+      if (!c || !role || role === 'viewer') { skipped++; continue; }
+      if (b.action === 'delete') {
+        app.deleteClipFiles(c);
+        db.run('DELETE FROM clips WHERE id = ?', c.id);
+      } else {
+        db.run('UPDATE clips SET locked = ?, lock_reason = ? WHERE id = ?', b.action === 'lock' ? 1 : 0, b.action === 'lock' ? (c.lock_reason || 'user') : null, c.id);
+      }
+      done++;
+    }
+    audit(db, { user: u, action: b.action === 'delete' ? 'clips deleted' : b.action === 'lock' ? 'clips locked' : 'clips unlocked', ip: ctx.ip, detail: `${done} clips` });
+    send(ctx.res, 200, { done, skipped });
+  });
+
+  // Short-lived download links, so a big ZIP or a trimmed clip can be fetched with a plain link.
+  const downloads = new Map(); // token -> { userId, expires, kind, ... }
+  const issueDownload = (u, data) => {
+    const token = randomToken(24);
+    downloads.set(token, { userId: u.id, expires: now() + 15 * 60_000, ...data });
+    for (const [k, v] of downloads) if (v.expires < now()) downloads.delete(k);
+    return `/api/downloads/${token}`;
+  };
+
+  router.add('POST', '/api/clips/zip', async (ctx) => {
+    const u = requireUser(ctx);
+    const b = await readJson(ctx.req);
+    const ids = (Array.isArray(b.ids) ? b.ids : []).slice(0, 2000).map(String);
+    const clips = ids.map((id) => db.get(`${CLIP_SELECT} WHERE c.id = ?`, id)).filter((c) => c && carRole(db, u, c.car_id));
+    if (!clips.length) throw new HttpError(400, 'No clips selected.');
+    const total = clips.reduce((a, c) => a + c.size, 0);
+    if (total > ZIP_LIMIT) throw new HttpError(413, `That’s ${(total / 1024 ** 3).toFixed(1)} GB; downloads are limited to 4 GB at a time. Select fewer clips.`);
+    audit(db, { user: u, action: 'clips downloaded', ip: ctx.ip, detail: `${clips.length} clips` });
+    send(ctx.res, 200, { url: issueDownload(u, { kind: 'zip', ids: clips.map((c) => c.id) }), count: clips.length, bytes: total });
+  });
+
+  router.add('GET', '/api/downloads/:token', async (ctx) => {
+    const u = requireUser(ctx);
+    const d = downloads.get(ctx.params.token);
+    if (!d || d.userId !== u.id || d.expires < now()) throw new HttpError(404, 'This download link has expired. Start the download again.');
+    if (d.kind === 'trim') {
+      return serveFile(ctx, d.path, 'video/mp4', { 'Content-Disposition': `attachment; filename="${d.name}"` });
+    }
+    const clips = d.ids.map((id) => db.get(`${CLIP_SELECT} WHERE c.id = ?`, id)).filter((c) => c && carRole(db, u, c.car_id));
+    const used = new Set();
+    const entries = [];
+    for (const c of clips) {
+      const folder = `${c.car_name} - ${c.camera_label}`.replace(/[\\/:*?"<>|]/g, '_');
+      let name = `${folder}/${c.file_name}`;
+      for (let i = 2; used.has(name); i++) name = `${folder}/${i}_${c.file_name}`;
+      used.add(name);
+      entries.push({ name, path: c.path });
+      const base = c.path.replace(/\.(mp4|odcenc)$/, '');
+      for (const ext of ['gpx', 'srt']) {
+        if (fs.existsSync(`${base}.${ext}`)) entries.push({ name: name.replace(/\.(mp4|odcenc)$/, `.${ext}`), path: `${base}.${ext}` });
+      }
+    }
+    const stamp = new Date().toISOString().slice(0, 10);
+    ctx.res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="OpenDashCam-${stamp}.zip"`, 'Cache-Control': 'no-store' });
+    try { await writeZip(ctx.res, entries); } catch { ctx.res.destroy(); }
+  });
+
+  /**
+   * Trims a clip (start/end in seconds). With save=true it becomes a new, locked clip next to the original
+   * (the original is unchanged); otherwise a download link for the trimmed file is returned.
+   */
+  router.add('POST', '/api/clips/:id/trim', async (ctx) => {
+    const u = requireUser(ctx);
+    const c = clipFor(u, ctx.params.id);
+    if (c.encrypted) throw new HttpError(400, 'Encrypted clips can’t be trimmed.');
+    const b = await readJson(ctx.req);
+    const start = Number(b.start);
+    const end = Number(b.end);
+    const dur = (c.duration_ms || 0) / 1000;
+    if (!(start >= 0 && end > start && (!dur || end <= dur + 1))) throw new HttpError(400, 'Choose a start before the end, inside the clip.');
+    const startedAt = c.started_at + Math.round(start * 1000);
+    const name = c.file_name.replace(/\.mp4$/i, '') + `_trim_${Math.round(start)}-${Math.round(end)}s.mp4`;
+    if (b.save) {
+      requireCarRole(db, u, c.car_id, true);
+      const id = crypto.randomUUID();
+      const dest = path.join(path.dirname(c.path), `${id.slice(0, 8)}_${name}`);
+      await trimClip(c.path, start, end, dest);
+      const size = fs.statSync(dest).size;
+      db.run(`INSERT INTO clips(id, camera_id, car_id, stream, file_name, path, started_at, duration_ms, size, sha256, codec, width, height, fps,
+          mode, locked, lock_reason, encrypted, created_at, trimmed_from, lat, lon, place, has_track)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'user', 0, ?, ?, ?, ?, ?, ?)`,
+        id, c.camera_id, c.car_id, c.stream, name, dest, startedAt, Math.round((end - start) * 1000), size,
+        hashOf(fs.readFileSync(dest)), c.codec, c.width, c.height, c.fps, c.mode, now(), c.id, c.lat, c.lon, c.place, c.has_track);
+      app.onClipAdded(id);
+      audit(db, { user: u, action: 'clip trimmed', target: `${c.car_name} · ${name}`, ip: ctx.ip });
+      return send(ctx.res, 201, { id });
+    }
+    const out = path.join(config.cacheDir, 'trims', `${crypto.randomUUID()}.mp4`);
+    await trimClip(c.path, start, end, out);
+    send(ctx.res, 200, { url: issueDownload(u, { kind: 'trim', path: out, name }) });
+  });
+
+  // ---------------------------------------------------------------- trip logbook (CSV)
+
+  router.add('GET', '/api/trips.csv', (ctx) => {
+    const u = requireUser(ctx);
+    const cars = visibleCarIds(db, u);
+    const s = getSettings(db);
+    const mph = s.units === 'mph' || (s.units === 'auto' && ctx.query.get('units') === 'mph');
+    const params = [...cars];
+    let where = `t.car_id IN (${cars.map(() => '?').join(',') || 'NULL'})`;
+    if (ctx.query.get('car')) { where += ' AND t.car_id = ?'; params.push(Number(ctx.query.get('car'))); }
+    if (ctx.query.get('from')) { where += ' AND t.start_t >= ?'; params.push(Number(ctx.query.get('from'))); }
+    if (ctx.query.get('to')) { where += ' AND t.start_t <= ?'; params.push(Number(ctx.query.get('to'))); }
+    const rows = db.all(`SELECT t.*, k.name AS car_name FROM trips t JOIN cars k ON k.id = t.car_id WHERE ${where} ORDER BY t.start_t`, ...params);
+    const dist = (m) => (mph ? m / 1609.344 : m / 1000).toFixed(2);
+    const spd = (ms) => (ms == null ? '' : (mph ? ms * 2.23694 : ms * 3.6).toFixed(0));
+    const pad = (n) => String(n).padStart(2, '0');
+    const day = (t) => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+    const clock = (t) => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+    const q = (v) => { const x = String(v ?? ''); return /[",\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x; };
+    const unit = mph ? 'mi' : 'km';
+    const speedUnit = mph ? 'mph' : 'km/h';
+    const lines = [['Date', 'Start', 'End', 'Car', 'Trip', 'From', 'To', `Distance (${unit})`, 'Duration (min)', `Average (${speedUnit})`, `Top speed (${speedUnit})`].join(',')];
+    let total = 0;
+    for (const t of rows) {
+      total += t.distance_m;
+      lines.push([day(t.start_t), clock(t.start_t), clock(t.end_t), t.car_name, t.name || t.auto_name || '', t.start_place || '', t.end_place || '',
+        dist(t.distance_m), Math.round((t.end_t - t.start_t) / 60_000), spd(t.avg_speed), spd(t.max_speed)].map(q).join(','));
+    }
+    lines.push(['Total', '', '', '', '', '', '', dist(total), '', '', ''].join(','));
+    ctx.res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="trip-logbook.csv"`, 'Cache-Control': 'no-store' });
+    ctx.res.end('\ufeff' + lines.join('\r\n') + '\r\n'); // BOM so Excel reads UTF-8
+  });
+
+  // ---------------------------------------------------------------- share links and incident reports
+  const shared = { ...app, serveFile, helpers: { visibleCarIds } };
+  registerShareRoutes(router, shared, { requireUser, clipFor });
+  registerReportRoutes(router, shared, { requireUser });
 
   // ---------------------------------------------------------------- encrypted clips
 
@@ -1009,10 +1219,76 @@ export function registerWebRoutes(router, app) {
     const rows = db.all(`SELECT e.*, k.name AS car_name, m.label AS camera_label FROM events e
       JOIN cars k ON k.id = e.car_id LEFT JOIN cameras m ON m.id = e.camera_id
       WHERE e.car_id IN (${cars.map(() => '?').join(',')}) ORDER BY e.t DESC LIMIT 200`, ...cars);
-    send(ctx.res, 200, rows.map((e) => ({
-      id: e.id, carId: e.car_id, carName: e.car_name, camera: e.camera_label, type: e.type, t: e.t,
-      data: safeJson(e.data),
-    })));
+    send(ctx.res, 200, rows.map((e) => {
+      const data = safeJson(e.data);
+      return {
+        id: e.id, carId: e.car_id, carName: e.car_name, camera: e.camera_label, type: e.type, t: e.t, data,
+        snapshotUrl: data?.snapshot ? `/api/snapshots/${e.id}` : null,
+      };
+    }));
+  });
+
+  /** An event's photo: for people who can see the car, or with the signed link sent in notifications. */
+  router.add('GET', '/api/snapshots/:id', (ctx) => {
+    const id = Number(ctx.params.id);
+    const ev = db.get('SELECT car_id FROM events WHERE id = ?', id);
+    if (!ev) throw new HttpError(404, 'Not found');
+    const viaLink = checkStreamToken(db, `snap-${id}`, ctx.query.get('st'));
+    if (!viaLink) {
+      const u = requireUser(ctx);
+      if (!carRole(db, u, ev.car_id)) throw new HttpError(404, 'Not found');
+    }
+    const file = snapshotPath(id);
+    if (!fs.existsSync(file)) throw new HttpError(404, 'No photo');
+    serveFile(ctx, file, 'image/jpeg', { 'Cache-Control': 'private, max-age=86400' });
+  });
+
+  // ---------------------------------------------------------------- arrival alert places
+
+  const placeView = (p) => ({ id: p.id, name: p.name, lat: p.lat, lon: p.lon, radiusM: p.radius_m, onArrive: !!p.on_arrive, onLeave: !!p.on_leave,
+    carIds: p.car_ids ? JSON.parse(p.car_ids) : null });
+  const readPlace = async (ctx, u) => {
+    const b = await readJson(ctx.req);
+    const name = str(b.name, 60)?.trim();
+    const lat = Number(b.lat);
+    const lon = Number(b.lon);
+    const radius = Math.min(5000, Math.max(30, Number(b.radiusM) || 150));
+    if (!name) throw new HttpError(400, 'Give the place a name.');
+    if (!(Math.abs(lat) <= 90 && Math.abs(lon) <= 180)) throw new HttpError(400, 'Choose a spot on the map.');
+    const visible = visibleCarIds(db, u);
+    const cars = Array.isArray(b.carIds) ? b.carIds.map(Number).filter((id) => visible.includes(id)) : null;
+    return { name, lat, lon, radius, arrive: b.onArrive !== false, leave: !!b.onLeave, cars: cars && cars.length ? JSON.stringify(cars) : null };
+  };
+
+  router.add('GET', '/api/alert-places', (ctx) => {
+    const u = requireUser(ctx);
+    send(ctx.res, 200, db.all('SELECT * FROM alert_places WHERE user_id = ? ORDER BY name', u.id).map(placeView));
+  });
+
+  router.add('POST', '/api/alert-places', async (ctx) => {
+    const u = requireUser(ctx);
+    const p = await readPlace(ctx, u);
+    const r = db.run('INSERT INTO alert_places(user_id, name, lat, lon, radius_m, on_arrive, on_leave, car_ids, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      u.id, p.name, p.lat, p.lon, p.radius, p.arrive ? 1 : 0, p.leave ? 1 : 0, p.cars, now());
+    audit(db, { user: u, action: 'alert place added', target: p.name, ip: ctx.ip });
+    send(ctx.res, 201, placeView(db.get('SELECT * FROM alert_places WHERE id = ?', Number(r.lastInsertRowid))));
+  });
+
+  router.add('PUT', '/api/alert-places/:id', async (ctx) => {
+    const u = requireUser(ctx);
+    const id = Number(ctx.params.id);
+    if (!db.get('SELECT 1 FROM alert_places WHERE id = ? AND user_id = ?', id, u.id)) throw new HttpError(404, 'Place not found');
+    const p = await readPlace(ctx, u);
+    db.run('UPDATE alert_places SET name = ?, lat = ?, lon = ?, radius_m = ?, on_arrive = ?, on_leave = ?, car_ids = ? WHERE id = ?',
+      p.name, p.lat, p.lon, p.radius, p.arrive ? 1 : 0, p.leave ? 1 : 0, p.cars, id);
+    send(ctx.res, 200, placeView(db.get('SELECT * FROM alert_places WHERE id = ?', id)));
+  });
+
+  router.add('DELETE', '/api/alert-places/:id', (ctx) => {
+    const u = requireUser(ctx);
+    const r = db.run('DELETE FROM alert_places WHERE id = ? AND user_id = ?', Number(ctx.params.id), u.id);
+    if (!r.changes) throw new HttpError(404, 'Place not found');
+    send(ctx.res, 200, { ok: true });
   });
 }
 

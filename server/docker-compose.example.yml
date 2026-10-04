@@ -49,6 +49,9 @@ services:
       - TZ=America/New_York
     volumes:
       - ./ml-cache:/cache
+      # Plate/face blurring (share links, incident reports) reads and writes footage here, at the same path
+      # as the server. Remove this line if you only use smart search and plate search.
+      - ./data:/data
     # No ports: only the ODC server talks to it, over Docker's internal network.
 
   # Optional: automatic HTTPS with a free, publicly trusted Let's Encrypt certificate (renewed automatically).

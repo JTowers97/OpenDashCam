@@ -7,6 +7,7 @@ self.addEventListener('push', (event) => {
     icon: '/icon.svg',
     badge: '/icon.svg',
     data: { url: data.url || '/#/events' },
+    ...(data.image ? { image: data.image } : {}),
     requireInteraction: !!data.urgent,
   }));
 });

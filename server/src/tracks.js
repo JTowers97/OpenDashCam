@@ -1,6 +1,7 @@
 import { getSettings } from './db.js';
 import { haversine, now } from './util.js';
 import { notify } from './notify.js';
+import { analyzePoints } from './alerts.js';
 import { placeName } from './geocode.js';
 
 // Alerts follow the server's Units setting; "auto" shows both, since the server can't know the reader's region.
@@ -42,6 +43,7 @@ export function insertPoints(db, carId, cameraId, points) {
     }
   });
   markTripsDirty(carId, points[0].t);
+  analyzePoints(db, carId, cameraId, points);
 }
 
 // ---------------------------------------------------------------- trips

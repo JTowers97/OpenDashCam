@@ -221,6 +221,38 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 CREATE INDEX IF NOT EXISTS audit_t ON audit(t);
 
+-- Expiring share links for single clips (or a trimmed part), optionally with plates/faces blurred.
+CREATE TABLE IF NOT EXISTS shares (
+  token TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  allow_download INTEGER NOT NULL DEFAULT 0,
+  blur_plates INTEGER NOT NULL DEFAULT 0,
+  blur_faces INTEGER NOT NULL DEFAULT 0,
+  start_s REAL,
+  end_s REAL,
+  file TEXT,                 -- processed copy (trimmed and/or blurred); null = the original clip
+  status TEXT NOT NULL,      -- processing | ready | failed
+  error TEXT,
+  views INTEGER NOT NULL DEFAULT 0
+);
+
+-- Places on the map that trigger arrival/leaving alerts for the person who created them.
+CREATE TABLE IF NOT EXISTS alert_places (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  lat REAL NOT NULL,
+  lon REAL NOT NULL,
+  radius_m REAL NOT NULL,
+  on_arrive INTEGER NOT NULL DEFAULT 1,
+  on_leave INTEGER NOT NULL DEFAULT 0,
+  car_ids TEXT,            -- JSON array, or null for all cars the person can see
+  created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS recovery_codes (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   code_hash TEXT NOT NULL,
@@ -244,6 +276,8 @@ const COLUMNS = [
   ['cars', 'storage_cap_gb', 'REAL'],           // null = no per-car limit
   ['users', 'quota_gb', 'REAL'],                // null = no per-person limit (cars they own)
   ['sessions', 'user_agent', 'TEXT'],
+  ['clips', 'trimmed_from', 'TEXT'],
+  ['cars', 'speed_alert_kmh', 'REAL'],        // null = no speed alert          // id of the clip a trimmed copy was cut from
   ['sessions', 'ip', 'TEXT'],
   ['sessions', 'last_used_at', 'INTEGER'],
 ];
@@ -309,6 +343,8 @@ export const DEFAULT_SETTINGS = {
   backupHour: 3,
   backupKeep: 7,
   auditRetentionDays: 365,
+  drivingEvents: false,
+  drivingSensitivity: 'normal',   // low | normal | high
   plateSearch: false,
   plateLog: false,
   plateRetentionDays: 30,

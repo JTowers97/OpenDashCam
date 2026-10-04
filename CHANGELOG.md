@@ -1,5 +1,40 @@
 # Changelog
 
+## App 1.3.0 · Server 1.3.0
+- **Server:** arrival alerts: draw places on the Map and get notified when a car arrives or leaves (with a
+  margin so GPS jitter at the edge doesn't cause repeat alerts)
+- **Server:** speed alerts per car: sustained for 10 seconds, once per stretch of speeding
+- **Server:** optional driving events (hard braking, hard acceleration, sharp turns) with a sensitivity
+  setting, shown in Events and as markers on trips
+- **Server:** impact alerts include a photo: in browser notifications, ntfy and on the Events page
+- **Server:** alerts are only sent for recent positions, so late uploads don't trigger stale notifications
+- **App:** sends a photo from the moment of an impact (with the date/time stamp) to the ODC Server
+
+## App 1.2.0 · Server 1.2.0
+- **Server:** expiring share links for a clip or a trimmed part: no account needed, 1 hour to 30 days,
+  optional download, view counts, turn off any time (Settings → Shared links). Links don't reveal the car,
+  account or location
+- **Server:** incident reports: every camera's footage around a moment, a printable report with summary,
+  route map, speed graph, events and notes, and the GPS track, in one ZIP. From impact events or the player
+- **Server:** optional blurring of license plates and faces for share links and reports, done by the ML
+  container on your server
+- **Server:** background jobs with progress for blurring and reports
+- **Server:** phone event messages (e.g. impact g-force) are now kept and shown in reports
+- **App:** optionally show your own license plate in the date/time stamp
+- **Fixed:** optional parts of some web pages could show the word "null"
+
+## App 1.1.0 · Server 1.1.0
+- **Server:** getting-started checklist on the Timeline (can be hidden)
+- **Server:** calendar view of footage; tap a day to see its clips
+- **Server:** bulk actions: select clips to lock, unlock, delete or download as one ZIP (with GPS tracks)
+- **Server:** clip trimming: mark start and end while watching, then save a copy as a new locked clip or download it
+- **Server:** trip logbook export (CSV) with dates, places, distances and speeds in your units
+- **App:** "Where I parked": the last position saved when parking mode starts or recording/tracking stops,
+  with directions and sharing (never saved inside privacy zones)
+- **App:** Quick Settings tile and home-screen widget to start and stop recording
+- **App:** bulk actions in Clips: select clips to lock, unlock, keep on phone, encrypt or delete
+- **Project:** no longer includes a LICENSE file, so uploads don't overwrite the repository's full GPLv3 text
+
 ## App 1.0.0 · Server 1.0.0
 - **Server:** built-in HTTPS with its own certificate; pairing QR codes carry its fingerprint so phones trust exactly it
 - **Server:** optional automatic HTTPS with a free Let's Encrypt certificate (Caddy container, renewed

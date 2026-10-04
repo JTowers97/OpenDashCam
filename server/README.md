@@ -33,6 +33,21 @@ built-in database; an optional second container adds smart search.
   deletions and every look at license plate data (admins see everyone's; others see their own)
 - **Database backups:** a daily copy of the database in `data/backups` (time and number kept are adjustable),
   plus "Back up now" and downloads in Settings
+- **Arrival alerts:** mark places on the Map (Alert places) and get a notification when a car arrives or
+  leaves. Each person's places and alerts are their own
+- **Speed alerts:** per car, when it stays above a speed you set for at least 10 seconds (needs live
+  location or tracking-only mode on the phone)
+- **Impact snapshots:** impact alerts include a photo from the moment of the impact (in browser
+  notifications, ntfy and the Events page)
+- **Driving events** (optional, Settings): hard braking, hard acceleration and sharp turns, found in the
+  GPS tracks recorded with clips and shown in Events and on trips. Only as reliable as the phone's GPS and
+  mounting: treat them as hints
+- **Share links:** share a clip, or part of it, through a link that works without an account and expires
+  after 1 hour, 1 day, 7 days or 30 days. Optionally allow downloading, and blur license plates and/or
+  faces first. Links don't reveal the car, the account or the location. Manage them in Settings → Shared links
+- **Incident reports:** from an impact event or any moment in a clip, one ZIP with every camera's footage
+  around it (trimmed; optionally blurred), a printable report (summary, route map, speed graph, events,
+  your notes) and the GPS track
 - **Retention** (off by default): maximum total footage size and/or maximum age for the server, per car
   (including "keep forever"), and a storage limit per person across the cars they own; locked clips
   are always kept
@@ -145,6 +160,15 @@ Progress shows on the Search page and in Settings. **Analyze footage** (Settings
 specific date range or car first, retry clips that failed, or analyze clips again. The ML container
 needs about 1.5 GB of RAM. Without a GPU, analysis
 takes roughly a second or two per minute of footage on a typical home server; searching is instant.
+
+## Blurring plates and faces (optional)
+
+Share links and incident reports can blur license plates and faces. This runs in the ML container (the
+same one as smart search), which needs access to the footage: keep the `./data:/data` line in its
+`volumes` in `docker-compose.yml`. Faces are found with YuNet (OpenCV), downloaded on first use; plates
+with the same detector as plate search. Blurring re-encodes the video and takes roughly as long as the
+clip on a typical home server. Detection isn't perfect: check the result before sharing anything
+sensitive.
 
 ## License plates (optional)
 

@@ -8,6 +8,9 @@ API (internal; don't expose this port to the internet):
   POST /embed/image   body: JPEG/PNG bytes  -> {"embedding": [float, ...]}   (unit length)
   POST /embed/text    body: {"text": "..."} -> {"embedding": [float, ...]}   (unit length)
   POST /plates        body: JPEG/PNG bytes  -> {"plates": [{"text", "confidence", "box": [x1, y1, x2, y2]}]}
+  POST /blur          body: {"id", "input", "output", "plates": bool, "faces": bool} -> {"ok": true}
+                      Blurs plates and/or faces in a video file (paths are shared with the ODC server via /data).
+  GET  /blur/<id>     -> {"status": "queued|running|done|failed", "progress": 0..1, "error"}
                       License plate reading (fast-alpr). Its models load on first use only, so they cost
                       nothing unless plate search is turned on in the ODC server.
 """
@@ -20,6 +23,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 from PIL import Image
+
+from blur import BlurJobs
 
 MODEL_NAME = os.environ.get("ODC_ML_MODEL", "clip-ViT-B-32")
 PORT = int(os.environ.get("PORT", "3003"))
@@ -120,6 +125,7 @@ def plate_model():
                     log.exception("License plate models failed to load")
     return state["plates"]
 lock = threading.Lock()  # one inference at a time keeps memory and CPU predictable
+blur_jobs = BlurJobs(plate_model, FAKE)
 
 
 def load():
@@ -157,10 +163,25 @@ class Handler(BaseHTTPRequestHandler):
             m = state["model"]
             return self._send(200, {"ready": m is not None, "model": "fake" if FAKE else MODEL_NAME,
                                     "dim": getattr(m, "dim", None), "error": state["error"],
-                                    "plates": {"loaded": state["plates"] is not None, "error": state["plates_error"]}})
+                                    "plates": {"loaded": state["plates"] is not None, "error": state["plates_error"]},
+                                    "blur": True})
+        if self.path.startswith("/blur/"):
+            job = blur_jobs.get(self.path[len("/blur/"):])
+            return self._send(200 if job else 404, job or {"error": "unknown job"})
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        if self.path == "/blur":
+            try:
+                b = json.loads(self._body())
+                src, dst = str(b["input"]), str(b["output"])
+                if not os.path.isfile(src):
+                    return self._send(400, {"error": f"input not found: {src} (is the data folder mounted in the ML container?)"})
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                blur_jobs.submit(str(b["id"]), src, dst, bool(b.get("plates")), bool(b.get("faces")))
+            except Exception as e:  # noqa: BLE001
+                return self._send(400, {"error": f"{type(e).__name__}: {e}"})
+            return self._send(200, {"ok": True})
         if self.path == "/plates":
             try:
                 img = Image.open(io.BytesIO(self._body()))

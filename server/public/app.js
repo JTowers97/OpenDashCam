@@ -1,4 +1,11 @@
 // Open Dash Cam web app. No build step: plain ES modules. MapLibre and the QR library load on demand.
+// Missing pieces (null/undefined/false) are skipped when adding to the page, so optional parts never show as "null".
+for (const m of ['append', 'prepend', 'replaceChildren']) {
+  const orig = Element.prototype[m];
+  Element.prototype[m] = function (...items) {
+    return orig.apply(this, items.flat(Infinity).filter((x) => x != null && x !== false));
+  };
+}
 const MAPLIBRE_JS = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js';
 const MAPLIBRE_CSS = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css';
 const QR_JS = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js';
@@ -70,6 +77,7 @@ const fmtBytes = (b) => b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : b 
 const fmtTime = (t) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 const fmtDateTime = (t) => new Date(t).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 const fmtDay = (t) => new Date(t).toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+const fmtSecs = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 const fmtDur = (ms) => { if (!ms) return ''; const s = Math.round(ms / 1000); const m = Math.floor(s / 60); return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}:${String(s % 60).padStart(2, '0')}`; };
 function ago(t) {
   if (!t) return 'never';
@@ -281,10 +289,14 @@ async function pairingPanel(carId, label) {
 
 async function pageTimeline(main, _id, params) {
   await loadCars();
+  const dayParam = params.get('day'); // yyyy-mm-dd from the calendar
   const f = {
     car: params.get('car') || '', sort: 'date', order: 'desc',
     locked: false, impact: false, parking: false,
+    from: dayParam ? new Date(dayParam + 'T00:00:00').getTime() : null,
+    to: dayParam ? new Date(dayParam + 'T23:59:59.999').getTime() : null,
   };
+  const view = params.get('view') === 'calendar' ? 'calendar' : 'grid';
   const grid = h('div');
   const more = h('button', { class: 'btn', style: 'margin-top:1rem' }, 'Load more');
   let offset = 0;
@@ -292,8 +304,31 @@ async function pageTimeline(main, _id, params) {
   let lastDay = null;
   let section = null;
 
-  const carSel = h('select', { onchange: () => { f.car = carSel.value; reload(); } },
+  // Selection for bulk actions
+  const selected = new Map(); // id -> clip
+  let selecting = false;
+  const bar = h('div', { class: 'bulkbar', style: 'display:none' });
+
+  const go = (extra = {}) => {
+    const q = new URLSearchParams();
+    if (f.car) q.set('car', f.car);
+    for (const [k, v] of Object.entries(extra)) if (v) q.set(k, v);
+    location.hash = `#/timeline${q.toString() ? '?' + q : ''}`;
+  };
+  const carSel = h('select', { onchange: () => { f.car = carSel.value; view === 'calendar' ? go({ view: 'calendar', month: params.get('month') }) : reload(); } },
     h('option', { value: '' }, 'All cars'), state.cars.map((c) => h('option', { value: c.id, selected: String(c.id) === f.car }, c.name)));
+  const viewToggle = h('div', { class: 'row', style: 'gap:0' },
+    h('button', { class: `chip${view === 'grid' ? ' on' : ''}`, onclick: () => go() }, 'Grid'),
+    h('button', { class: `chip${view === 'calendar' ? ' on' : ''}`, onclick: () => go({ view: 'calendar' }) }, 'Calendar'));
+
+  main.append(checklistCard());
+  main.append(h('h1', {}, 'Timeline'));
+
+  if (view === 'calendar') {
+    main.append(h('div', { class: 'toolbar' }, viewToggle, carSel), await calendarView(params.get('month'), f.car, (month) => go({ view: 'calendar', month })));
+    return;
+  }
+
   const sortSel = h('select', { onchange: () => { f.sort = sortSel.value; reload(); } },
     ['date', 'size', 'car', 'camera', 'location'].map((s) => h('option', { value: s }, `Sort by ${s}`)));
   const orderBtn = h('button', { class: 'btn', onclick: () => { f.order = f.order === 'desc' ? 'asc' : 'desc'; orderBtn.textContent = f.order === 'desc' ? '↓ Newest/largest first' : '↑ Oldest/smallest first'; reload(); } }, '↓ Newest/largest first');
@@ -302,14 +337,52 @@ async function pageTimeline(main, _id, params) {
     return c;
   };
   const count = h('span', { class: 'muted small' });
+  const selectBtn = h('button', { class: 'btn', onclick: () => setSelecting(!selecting) }, 'Select');
 
-  main.append(h('h1', {}, 'Timeline'),
-    h('div', { class: 'toolbar' }, carSel, sortSel, orderBtn, chip('locked', 'Locked'), chip('impact', 'Impact'), chip('parking', 'Parking'), count),
-    grid, more);
+  main.append(
+    h('div', { class: 'toolbar' }, viewToggle, carSel, sortSel, orderBtn, chip('locked', 'Locked'), chip('impact', 'Impact'), chip('parking', 'Parking'), selectBtn, count),
+    dayParam ? h('div', { class: 'row', style: 'margin-bottom:.5rem' }, h('span', { class: 'badge accent' }, fmtDay(f.from)), h('a', { href: '#/timeline' }, 'Show all days')) : null,
+    grid, more, bar);
+
+  function setSelecting(on) {
+    selecting = on;
+    selectBtn.textContent = on ? 'Done' : 'Select';
+    if (!on) selected.clear();
+    grid.classList.toggle('selecting', on);
+    grid.querySelectorAll('.tile').forEach((t) => t.classList.remove('picked'));
+    renderBar();
+  }
+  function renderBar() {
+    bar.style.display = selecting ? '' : 'none';
+    const n = selected.size;
+    const bytes = [...selected.values()].reduce((a, c) => a + c.size, 0);
+    const act = (action, label, cls = '') => h('button', { class: `btn small ${cls}`, disabled: !n, onclick: async () => {
+      if (action === 'delete' && !confirm(`Delete ${n} clips from the server? Locked clips are deleted too. Copies on phones and SMB shares aren’t affected.`)) return;
+      const r = await api('POST', '/api/clips/bulk', { ids: [...selected.keys()], action });
+      toast(`${r.data.done} clips ${action === 'delete' ? 'deleted' : action + 'ed'}${r.data.skipped ? `; ${r.data.skipped} skipped (no permission)` : ''}.`);
+      setSelecting(false);
+      reload();
+    } }, label);
+    bar.replaceChildren(
+      h('span', { class: 'grow' }, n ? `${n} selected · ${fmtBytes(bytes)}` : 'Tap clips to select them'),
+      h('button', { class: 'btn small', onclick: () => { grid.querySelectorAll('.tile').forEach((t) => { t.classList.add('picked'); selected.set(t.dataset.id, t._clip); }); renderBar(); } }, 'Select all shown'),
+      act('lock', 'Lock'), act('unlock', 'Unlock'),
+      h('button', { class: 'btn small', disabled: !n, onclick: async () => {
+        try {
+          const r = await api('POST', '/api/clips/zip', { ids: [...selected.keys()] });
+          toast(`Downloading ${r.data.count} clips (${fmtBytes(r.data.bytes)}) as a ZIP…`);
+          location.href = r.data.url;
+        } catch (e) { toast(e.message); }
+      } }, 'Download'),
+      act('delete', 'Delete', 'danger'),
+      h('button', { class: 'btn small', onclick: () => setSelecting(false) }, 'Cancel'));
+  }
 
   async function load() {
     const q = new URLSearchParams({ sort: f.sort, order: f.order, limit: 120, offset });
     if (f.car) q.set('car', f.car);
+    if (f.from) q.set('from', f.from);
+    if (f.to) q.set('to', f.to);
     for (const k of ['locked', 'impact', 'parking']) if (f[k]) q.set(k, '1');
     const { data } = await api('GET', `/api/clips?${q}`);
     total = data.total;
@@ -326,7 +399,17 @@ async function pageTimeline(main, _id, params) {
         section = h('div', { class: 'grid' });
         grid.append(section);
       }
-      section.append(clipTile(c));
+      const tile = clipTile(c);
+      tile.dataset.id = c.id;
+      tile._clip = c;
+      // In select mode a tap selects instead of opening the clip.
+      tile.addEventListener('click', (e) => {
+        if (!selecting) return;
+        e.stopImmediatePropagation();
+        if (selected.has(c.id)) { selected.delete(c.id); tile.classList.remove('picked'); } else { selected.set(c.id, c); tile.classList.add('picked'); }
+        renderBar();
+      }, true);
+      section.append(tile);
     }
     more.style.display = offset < total ? '' : 'none';
   }
@@ -338,6 +421,63 @@ async function pageTimeline(main, _id, params) {
   }
   more.onclick = load;
   await load();
+}
+
+/** Month grid showing which days have footage; tapping a day opens it in the timeline. */
+async function calendarView(monthParam, car, onMonth) {
+  const now = new Date();
+  const month = /^\d{4}-\d{2}$/.test(monthParam || '') ? monthParam : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const [y, m] = month.split('-').map(Number);
+  const { data } = await api('GET', `/api/clips/calendar?month=${month}${car ? `&car=${car}` : ''}`);
+  const shift = (d) => { const t = new Date(y, m - 1 + d, 1); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`; };
+  const first = new Date(y, m - 1, 1);
+  const daysIn = new Date(y, m, 0).getDate();
+  const lead = (first.getDay() + 6) % 7; // weeks start Monday
+  const max = Math.max(1, ...Object.values(data.days).map((d) => d.count));
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push(h('div', { class: 'cal-cell empty' }));
+  for (let d = 1; d <= daysIn; d++) {
+    const key = `${month}-${String(d).padStart(2, '0')}`;
+    const info = data.days[key];
+    const isToday = new Date().toDateString() === new Date(y, m - 1, d).toDateString();
+    cells.push(h(info ? 'a' : 'div', {
+      class: `cal-cell${info ? ' has' : ''}${isToday ? ' today' : ''}`,
+      href: info ? `#/timeline?day=${key}${car ? `&car=${car}` : ''}` : undefined,
+      style: info ? `--level:${0.25 + 0.75 * (info.count / max)}` : undefined,
+    },
+    h('div', { class: 'cal-num' }, d),
+    info ? h('div', { class: 'cal-info' }, `${info.count} clip${info.count === 1 ? '' : 's'}`, h('br'), fmtBytes(info.bytes)) : null,
+    info?.impact ? h('span', { class: 'cal-impact', title: 'Impact' }, '⚠') : null));
+  }
+  const monthName = first.toLocaleDateString([], { month: 'long', year: 'numeric' });
+  const totalClips = Object.values(data.days).reduce((a, d) => a + d.count, 0);
+  return h('div', { class: 'stack' },
+    h('div', { class: 'row' },
+      h('button', { class: 'btn small', onclick: () => onMonth(shift(-1)) }, '‹'),
+      h('h2', { style: 'margin:0;min-width:12rem;text-align:center' }, monthName),
+      h('button', { class: 'btn small', onclick: () => onMonth(shift(1)) }, '›'),
+      h('span', { class: 'muted small' }, `${totalClips} clips this month`)),
+    h('div', { class: 'cal' }, ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => h('div', { class: 'cal-head' }, d)), cells));
+}
+
+/** Getting-started checklist, shown until everything is done or it's hidden. */
+function checklistCard() {
+  const key = `odc.checklist.hidden.${state.me.username}`;
+  const box = h('div');
+  if (localStorage.getItem(key)) return box;
+  api('GET', '/api/checklist').then(({ data }) => {
+    const done = data.filter((i) => i.done).length;
+    if (done === data.length) return;
+    box.append(h('div', { class: 'card stack', style: 'margin-bottom:1rem;max-width:760px' },
+      h('div', { class: 'row' }, h('h2', { class: 'grow', style: 'margin:0' }, 'Getting started'),
+        h('span', { class: 'muted small' }, `${done} of ${data.length} done`),
+        h('button', { class: 'btn small', onclick: () => { localStorage.setItem(key, '1'); box.replaceChildren(); } }, 'Hide')),
+      h('div', { class: 'stack', style: 'gap:.35rem' }, data.map((i) => h('div', { class: 'row', style: 'align-items:flex-start;flex-wrap:nowrap' },
+        h('span', { style: `color:${i.done ? 'var(--ok)' : 'var(--muted)'};width:1.2rem` }, i.done ? '✓' : '○'),
+        h('div', {}, i.done ? h('span', { class: 'muted' }, i.title) : h('a', { href: i.link }, i.title),
+          !i.done && i.hint ? h('div', { class: 'muted small' }, i.hint) : null))))));
+  }).catch(() => {});
+  return box;
 }
 
 function clipTile(c, onChange, offsetMs) {
@@ -425,12 +565,38 @@ async function openClip(id, onChange, offsetMs) {
   const syncLink = !c.encrypted ? h('a', { class: 'btn', href: `#/sync?car=${c.carId}&from=${c.startedAt - 60000}&to=${c.startedAt + 20 * 60000}&t=${c.startedAt}`, onclick: () => close() }, 'Watch all cameras') : null;
   const mapLink = c.hasTrack ? h('a', { class: 'btn', href: `#/map?car=${c.carId}&from=${c.startedAt}&to=${c.startedAt + (c.durationMs || 180000)}`, onclick: () => close() }, 'Show route on map') : null;
 
-  body.append(c.encrypted ? null : video, note,
-    h('div', { class: 'row' }, h('h2', { class: 'grow', style: 'margin:0' }, `${c.carName} · ${c.camera}`), syncLink, lockBtn, dl, mapLink, del),
+  // Trimming: mark start and end while watching, then save a copy or download it.
+  const trim = { start: null, end: null };
+  const trimInfo = h('span', { class: 'small' });
+  const showTrim = () => { trimInfo.textContent = `Start ${trim.start == null ? '–' : fmtSecs(trim.start)} · End ${trim.end == null ? '–' : fmtSecs(trim.end)}`; };
+  const doTrim = async (save) => {
+    if (trim.start == null || trim.end == null || trim.end <= trim.start) return toast('Set a start and an end after it first.');
+    try {
+      const r = await api('POST', `/api/clips/${id}/trim`, { start: trim.start, end: trim.end, save });
+      if (save) { toast('Saved as a new clip (locked). The original is unchanged.'); onChange?.(); } else location.href = r.data.url;
+    } catch (e) { toast(e.message); }
+  };
+  showTrim();
+  const trimPanel = c.encrypted ? null : h('div', { class: 'card stack', style: 'display:none;background:var(--panel2)' },
+    h('div', { class: 'row' },
+      h('button', { class: 'btn small', onclick: () => { trim.start = video.currentTime; showTrim(); } }, 'Set start here'),
+      h('button', { class: 'btn small', onclick: () => { trim.end = video.currentTime; showTrim(); } }, 'Set end here'),
+      trimInfo),
+    h('div', { class: 'row' },
+      canManage ? h('button', { class: 'btn small primary', onclick: () => doTrim(true) }, 'Save as new clip') : null,
+      h('button', { class: 'btn small', onclick: () => doTrim(false) }, 'Download trimmed')),
+    h('div', { class: 'muted small' }, 'Cuts land on the nearest keyframe (about a second apart) so the video isn’t re-encoded.'));
+  const trimBtn = c.encrypted ? null : h('button', { class: 'btn', onclick: () => { trimPanel.style.display = trimPanel.style.display === 'none' ? '' : 'none'; } }, 'Trim');
+  const sharePanel = c.encrypted ? null : shareForm(c, trim, video);
+  const shareBtn = c.encrypted ? null : h('button', { class: 'btn', onclick: () => { sharePanel.style.display = sharePanel.style.display === 'none' ? '' : 'none'; } }, 'Share');
+  const reportBtn = h('button', { class: 'btn', onclick: () => reportDialog(c.carId, c.startedAt + Math.round((c.encrypted ? 0 : video.currentTime) * 1000)) }, 'Incident report');
+
+  body.append(c.encrypted ? null : video, note, trimPanel, sharePanel,
+    h('div', { class: 'row' }, h('h2', { class: 'grow', style: 'margin:0' }, `${c.carName} · ${c.camera}`), syncLink, trimBtn, shareBtn, reportBtn, lockBtn, dl, mapLink, del),
     h('table', {},
       [['Recorded', fmtDateTime(c.startedAt)], ['Place', c.place || (c.lat != null ? `${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}` : '')], ['Length', fmtDur(c.durationMs)], ['Size', fmtBytes(c.size)],
         ['Video', [c.width && `${c.width}×${c.height}`, c.fps && `${c.fps} fps`, c.codec?.toUpperCase()].filter(Boolean).join(' · ')],
-        ['Mode', c.mode || ''], ['Lock', c.locked ? (c.lockReason === 'impact' ? 'Locked by impact detection' : 'Locked') : 'Not locked'],
+        ['Mode', c.mode || ''], ...(c.trimmedFrom ? [['Trimmed from', h('a', { href: '#', onclick: (e) => { e.preventDefault(); close(); openClip(c.trimmedFrom); } }, 'original clip')]] : []), ['Lock', c.locked ? (c.lockReason === 'impact' ? 'Locked by impact detection' : 'Locked') : 'Not locked'],
         ['SHA-256', h('code', { class: 'small' }, c.sha256)], ['File', c.fileName]]
         .map(([k, v]) => h('tr', {}, h('th', {}, k), h('td', {}, v)))));
   const close = modal(body);
@@ -613,10 +779,12 @@ async function pageMap(main, _id, params) {
   const dateIn = h('input', { type: 'date', value: params.get('from') ? new Date(Number(params.get('from'))).toISOString().slice(0, 10) : today });
   const routeInfo = h('div', { class: 'muted small' });
   const list = h('div', { class: 'stack' });
+  const placesCard = h('div', { class: 'card stack' });
   side.append(h('h1', {}, 'Map'), list,
     h('div', { class: 'card stack' }, h('h3', {}, 'Route history'),
       state.cars.length ? h('div', { class: 'row' }, carSel, dateIn, h('button', { class: 'btn', onclick: () => showRoute() }, 'Show')) : h('p', { class: 'muted' }, 'No cars yet.'),
-      routeInfo));
+      routeInfo),
+    placesCard);
   main.append(h('div', { class: 'map-page' }, side, mapEl));
 
   let maplibregl;
@@ -683,7 +851,91 @@ async function pageMap(main, _id, params) {
     } else routeInfo.textContent = 'No GPS data for that day.';
   }
 
+  // ---- alert places: arriving at / leaving a place sends you a notification
+  let places = [];
+  let draft = null; // place being added or edited
+  const circle = (lat, lon, r) => {
+    const pts = [];
+    for (let i = 0; i <= 64; i++) {
+      const a = (i / 64) * 2 * Math.PI;
+      pts.push([lon + (r / (111320 * Math.cos(lat * Math.PI / 180))) * Math.sin(a), lat + (r / 111320) * Math.cos(a)]);
+    }
+    return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [pts] }, properties: {} };
+  };
+  const drawPlaces = () => {
+    if (!map.getSource('places')) return;
+    map.getSource('places').setData({ type: 'FeatureCollection', features: places.filter((p) => p.id !== draft?.id).map((p) => circle(p.lat, p.lon, p.radiusM)) });
+    map.getSource('draft').setData({ type: 'FeatureCollection', features: draft?.lat != null ? [circle(draft.lat, draft.lon, draft.radiusM)] : [] });
+  };
+  async function loadPlaces() {
+    places = (await api('GET', '/api/alert-places')).data;
+    renderPlaces();
+    drawPlaces();
+  }
+  function renderPlaces() {
+    const mph = useMph();
+    const sizeLabel = (m) => (mph ? `${Math.round(m / 0.3048 / 10) * 10} ft` : `${Math.round(m)} m`);
+    if (draft) {
+      const name = h('input', { type: 'text', value: draft.name || '', placeholder: 'Name, e.g. Home or School' });
+      const radius = h('input', { type: 'range', min: 50, max: 2000, step: 25, value: draft.radiusM });
+      const rLabel = h('span', { class: 'small' }, sizeLabel(draft.radiusM));
+      radius.oninput = () => { draft.radiusM = Number(radius.value); rLabel.textContent = sizeLabel(draft.radiusM); drawPlaces(); };
+      const arrive = h('input', { type: 'checkbox', checked: draft.onArrive !== false });
+      const leave = h('input', { type: 'checkbox', checked: !!draft.onLeave });
+      const allCars = h('input', { type: 'checkbox', checked: !draft.carIds });
+      const carBoxes = state.cars.map((c) => {
+        const box = h('input', { type: 'checkbox', checked: !draft.carIds || draft.carIds.includes(c.id) });
+        box.dataset.id = c.id;
+        return h('label', { class: 'row small' }, box, c.name);
+      });
+      const carList = h('div', { class: 'stack', style: `gap:.15rem;padding-left:1.4rem;${allCars.checked ? 'display:none' : ''}` }, carBoxes);
+      allCars.onchange = () => { carList.style.display = allCars.checked ? 'none' : ''; };
+      placesCard.replaceChildren(h('h3', {}, draft.id ? 'Edit alert place' : 'New alert place'),
+        h('p', { class: 'muted small', style: 'margin:0' }, draft.lat == null ? 'Click the map where the place is.' : 'Click the map to move it.'),
+        name, h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'Size'), radius, rLabel),
+        h('label', { class: 'row small' }, arrive, 'Tell me when a car arrives'),
+        h('label', { class: 'row small' }, leave, 'Tell me when a car leaves'),
+        h('label', { class: 'row small' }, allCars, 'All my cars'), carList,
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary small', onclick: async () => {
+            if (draft.lat == null) return toast('Click the map to place it first.');
+            const body = { name: name.value, lat: draft.lat, lon: draft.lon, radiusM: draft.radiusM, onArrive: arrive.checked, onLeave: leave.checked,
+              carIds: allCars.checked ? null : carBoxes.map((l) => l.querySelector('input')).filter((b) => b.checked).map((b) => Number(b.dataset.id)) };
+            try {
+              await api(draft.id ? 'PUT' : 'POST', draft.id ? `/api/alert-places/${draft.id}` : '/api/alert-places', body);
+              draft = null;
+              mapEl.style.cursor = '';
+              toast('Saved. You’ll get a notification when a car arrives or leaves (Settings → notifications).');
+              await loadPlaces();
+            } catch (e) { toast(e.message); }
+          } }, 'Save'),
+          h('button', { class: 'btn small', onclick: () => { draft = null; mapEl.style.cursor = ''; renderPlaces(); drawPlaces(); } }, 'Cancel'),
+          draft.id ? h('button', { class: 'btn small danger', onclick: async () => { await api('DELETE', `/api/alert-places/${draft.id}`); draft = null; loadPlaces(); } }, 'Delete') : null));
+      return;
+    }
+    placesCard.replaceChildren(h('h3', {}, 'Alert places'),
+      h('p', { class: 'muted small', style: 'margin:0' }, 'Get a notification when a car arrives at or leaves a place.'),
+      ...places.map((p) => h('div', { class: 'row', style: 'cursor:pointer', onclick: () => { draft = { ...p }; map.flyTo({ center: [p.lon, p.lat], zoom: 15 }); mapEl.style.cursor = 'crosshair'; renderPlaces(); drawPlaces(); } },
+        h('strong', { class: 'grow' }, p.name),
+        h('span', { class: 'muted small' }, [p.onArrive && 'arrive', p.onLeave && 'leave'].filter(Boolean).join(' · ')))),
+      h('button', { class: 'btn small', onclick: () => { draft = { radiusM: 150, onArrive: true }; mapEl.style.cursor = 'crosshair'; renderPlaces(); } }, 'Add a place'));
+  }
+  map.on('click', (e) => {
+    if (!draft) return;
+    draft.lat = e.lngLat.lat;
+    draft.lon = e.lngLat.lng;
+    renderPlaces();
+    drawPlaces();
+  });
+
   map.on('load', () => {
+    map.addSource('places', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addSource('draft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'places-fill', type: 'fill', source: 'places', paint: { 'fill-color': '#3d8bff', 'fill-opacity': 0.15 } });
+    map.addLayer({ id: 'places-line', type: 'line', source: 'places', paint: { 'line-color': '#3d8bff', 'line-width': 2 } });
+    map.addLayer({ id: 'draft-fill', type: 'fill', source: 'draft', paint: { 'fill-color': '#ff5a36', 'fill-opacity': 0.2 } });
+    map.addLayer({ id: 'draft-line', type: 'line', source: 'draft', paint: { 'line-color': '#ff5a36', 'line-width': 3 } });
+    loadPlaces().catch(() => {});
     refresh();
     if (params.get('from')) showRoute(Number(params.get('from')) - 5000, Number(params.get('to')) + 5000);
   });
@@ -701,7 +953,8 @@ async function pageTrips(main, _id, params) {
   const { data } = await api('GET', `/api/trips${q}`);
   main.append(h('h1', {}, 'Trips'),
     h('p', { class: 'muted' }, 'Trips are built automatically from GPS tracks: a new trip starts after 5 minutes without movement data.'),
-    h('div', { class: 'toolbar' }, carSel),
+    h('div', { class: 'toolbar' }, carSel,
+      data.length ? h('a', { class: 'btn small', href: `/api/trips.csv?units=${useMph() ? 'mph' : 'kmh'}${params.get('car') ? `&car=${params.get('car')}` : ''}`, title: 'Trips with dates, places, distances and speeds, for mileage records' }, 'Export logbook (CSV)') : null),
     data.length ? h('div', { class: 'card', style: 'padding:0;overflow-x:auto' }, h('table', {},
       h('tr', {}, ['Trip', 'Car', 'Start', 'Duration', 'Distance', 'Average', 'Top speed'].map((x) => h('th', {}, x))),
       data.map((t) => h('tr', { style: 'cursor:pointer', onclick: () => (location.hash = `#/trip/${t.id}`) },
@@ -788,6 +1041,19 @@ async function pageTrip(main, id) {
     if (coords.length) {
       new maplibregl.Marker({ color: '#3dbb6c' }).setLngLat(coords[0]).addTo(map);
       new maplibregl.Marker({ color: '#e5484d' }).setLngLat(coords[coords.length - 1]).addTo(map);
+      // Driving events, speeding and impacts along the trip
+      const icons = { hard_brake: '⏬', hard_accel: '⏫', sharp_turn: '↪', speeding: '🚨', impact: '⚠' };
+      const names = { hard_brake: 'Hard braking', hard_accel: 'Hard acceleration', sharp_turn: 'Sharp turn', speeding: 'Speeding', impact: 'Impact' };
+      for (const e of t.events || []) {
+        const d = e.data || {};
+        let at = d.lat != null ? [d.lon, d.lat] : null;
+        if (!at && t.route.length) { const p = t.route.reduce((a, b) => (Math.abs(b.t - e.t) < Math.abs(a.t - e.t) ? b : a)); at = [p.lon, p.lat]; }
+        if (!at) continue;
+        const el = h('div', { class: 'event-marker', title: `${names[e.type]} · ${fmtDateTime(e.t)}` }, icons[e.type] || '•');
+        new maplibregl.Marker({ element: h('div', {}, el) }).setLngLat(at)
+          .setPopup(new maplibregl.Popup({ offset: 14 }).setText(`${names[e.type]} at ${new Date(e.t).toLocaleTimeString()}${d.g ? ` · ${d.g} g` : ''}${d.speedKmh ? ` · ${fmtSpeed(d.speedKmh / 3.6)}` : ''}`))
+          .addTo(map);
+      }
     }
   });
 }
@@ -1059,6 +1325,21 @@ function carCard(car) {
     card.append(h('h3', {}, 'When cameras disagree on location or speed'), h('div', { class: 'row' }, pol, truth));
   }
 
+  // Speed alert
+  if (manage) {
+    const mph = useMph();
+    const toUnit = (k) => (k == null ? '' : Math.round(mph ? k / 1.609344 : k));
+    const speedIn = h('input', { type: 'number', min: '0', step: '5', value: toUnit(car.speedAlertKmh), placeholder: 'Off', style: 'width:100px' });
+    card.append(h('h3', {}, 'Speed alert'),
+      h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'Notify me when this car stays above'), speedIn, h('span', { class: 'small muted' }, mph ? 'mph' : 'km/h'),
+        h('button', { class: 'btn small', onclick: async () => {
+          const v = speedIn.value === '' ? null : Number(speedIn.value) * (mph ? 1.609344 : 1);
+          await api('PATCH', `/api/cars/${car.id}`, { speedAlertKmh: v });
+          toast(v ? 'Speed alert saved.' : 'Speed alert off.');
+        } }, 'Save')),
+      h('p', { class: 'muted small' }, 'For at least 10 seconds, so brief GPS glitches don’t count. At most one alert per stretch of speeding. Needs live location or tracking-only mode on the phone. Leave empty to turn off.'));
+  }
+
   // Footage kept for this car
   if (manage) {
     const mode = h('select', {}, [['default', 'Server default'], ['forever', 'Keep forever'], ['days', 'Delete unlocked clips after…']]
@@ -1120,13 +1401,27 @@ function carCard(car) {
 
 async function pageEvents(main) {
   const { data } = await api('GET', '/api/events');
-  const labels = { impact: '⚠ Impact', mismatch: '⇄ Cameras disagree', offline: '⏻ Went offline', overheating: '🌡 Overheating', battery_cutoff: '🔋 Battery cutoff', recording_stopped: '■ Recording stopped' };
-  const detail = (e) => e.type === 'mismatch' && e.data ? `${fmtShortDist(e.data.distance)} apart, ${fmtSpeed(e.data.speedDiffKmh / 3.6)} speed difference` : '';
+  const labels = {
+    impact: '⚠ Impact', mismatch: '⇄ Cameras disagree', offline: '⏻ Went offline', overheating: '🌡 Overheating', battery_cutoff: '🔋 Battery cutoff',
+    recording_stopped: '■ Recording stopped', arrived: '📍 Arrived', left: '🏁 Left', speeding: '🚨 Speeding',
+    hard_brake: '⏬ Hard braking', hard_accel: '⏫ Hard acceleration', sharp_turn: '↪ Sharp turn',
+  };
+  const detail = (e) => {
+    const d = e.data || {};
+    if (e.type === 'mismatch') return `${fmtShortDist(d.distance)} apart, ${fmtSpeed(d.speedDiffKmh / 3.6)} speed difference`;
+    if (e.type === 'arrived' || e.type === 'left') return d.place || '';
+    if (e.type === 'speeding') return `${fmtSpeed(d.speedKmh / 3.6)} (alert above ${fmtSpeed(d.limitKmh / 3.6)})`;
+    if (['hard_brake', 'hard_accel', 'sharp_turn'].includes(e.type)) return `${d.g} g at ${fmtSpeed(d.speedKmh / 3.6)}`;
+    return d.message || '';
+  };
+  const photo = (e) => e.snapshotUrl ? h('img', { src: e.snapshotUrl, alt: 'Photo', style: 'width:120px;border-radius:6px;cursor:zoom-in;display:block;margin-top:.3rem',
+    onclick: () => modal(h('img', { src: e.snapshotUrl, alt: 'Photo', style: 'width:100%;border-radius:8px' })) }) : null;
   main.append(h('h1', {}, 'Events'),
     data.length ? h('div', { class: 'card', style: 'padding:0;overflow-x:auto' }, h('table', {},
-      h('tr', {}, ['Event', 'Car', 'Camera', 'When', 'Details'].map((x) => h('th', {}, x))),
+      h('tr', {}, ['Event', 'Car', 'Camera', 'When', 'Details', ''].map((x) => h('th', {}, x))),
       data.map((e) => h('tr', {}, h('td', {}, labels[e.type] || e.type), h('td', {}, e.carName), h('td', {}, e.camera || ''),
-        h('td', {}, fmtDateTime(e.t)), h('td', { class: 'small muted' }, detail(e))))))
+        h('td', {}, fmtDateTime(e.t)), h('td', { class: 'small muted' }, detail(e), photo(e)),
+        h('td', {}, e.type === 'impact' ? h('button', { class: 'btn small', onclick: () => reportDialog(e.carId, e.t) }, 'Incident report') : null)))))
       : h('p', { class: 'muted' }, 'No events. Impacts, overheating, cameras going offline and location disagreements show up here.'));
 }
 
@@ -1135,8 +1430,10 @@ async function pageEvents(main) {
 async function serverSettingsForm(onSaved) {
   const { data: s } = await api('GET', '/api/settings');
   const f = {};
-  const field = (key, label, type = 'text', hint) => {
-    const input = h('input', { type, value: s[key] ?? '' });
+  const field = (key, label, type = 'text', hint, options) => {
+    const input = type === 'select'
+      ? h('select', {}, options.map(([v, l]) => h('option', { value: v, selected: s[key] === v }, l)))
+      : h('input', { type, value: s[key] ?? '' });
     if (type === 'checkbox') { input.checked = !!s[key]; input.removeAttribute('value'); }
     f[key] = input;
     return h('label', { class: 'field' }, h('span', {}, label), input, hint ? h('div', { class: 'muted small' }, hint) : null);
@@ -1314,6 +1611,10 @@ async function serverSettingsForm(onSaved) {
     field('mlUrl', 'ML service address', 'url'),
     field('searchFrameIntervalSec', 'Analyze one frame every (seconds)', 'number', 'Lower finds brief moments more reliably but takes longer. Default 10.'),
     smartStatus,
+    h('h3', {}, 'Driving events'),
+    h('label', { class: 'row' }, field('drivingEvents', '', 'checkbox').querySelector('input'), 'Mark hard braking, hard acceleration and sharp turns'),
+    field('drivingSensitivity', 'Sensitivity', 'select', null, [['low', 'Low (only very hard events)'], ['normal', 'Normal'], ['high', 'High (more events)']]),
+    h('div', { class: 'muted small' }, 'Found from the GPS track phones record with clips (one point per second), shown in Events and on trips. Only as reliable as the phone’s GPS and how steadily it’s mounted: treat them as hints, not measurements.'),
     h('h3', {}, 'License plates'),
     plateToggle,
     h('div', { class: 'muted small' }, 'Reads license plates in your footage on this server (needs the ML container), so clips can be found by plate.'),
@@ -1394,6 +1695,130 @@ function auditCard() {
     h('form', { class: 'row', onsubmit: (e) => { e.preventDefault(); load(false); } }, filter, userIn, h('button', { class: 'btn small', type: 'submit' }, 'Filter')),
     table, more_);
   load(false).catch((e) => table.append(h('p', { class: 'error' }, e.message)));
+  return card;
+}
+
+/** Polls a background job until it finishes; calls onUpdate with each status. */
+async function waitForJob(jobId, onUpdate) {
+  for (;;) {
+    const { data } = await api('GET', `/api/jobs/${jobId}`);
+    onUpdate(data);
+    if (data.status === 'done' || data.status === 'failed') return data;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+const progressBar = () => {
+  const bar = h('div', { class: 'progress' }, h('div'));
+  bar.set = (p) => { bar.firstChild.style.width = `${Math.round(p * 100)}%`; };
+  return bar;
+};
+
+/** Optional plate/face blurring checkboxes; disabled with an explanation when the ML container isn't available. */
+function blurOptions() {
+  const plates = h('input', { type: 'checkbox' });
+  const faces = h('input', { type: 'checkbox' });
+  const note = h('div', { class: 'muted small' });
+  plates.disabled = faces.disabled = true;
+  api('GET', '/api/blur/available').then(({ data }) => {
+    plates.disabled = faces.disabled = !data.available;
+    note.textContent = data.available
+      ? 'Blurring is done on your server and can take a few minutes for long videos.'
+      : 'Blurring needs the optional ML container (see the server README).';
+  }).catch(() => {});
+  const box = h('div', { class: 'stack', style: 'gap:.2rem' },
+    h('label', { class: 'row small' }, plates, 'Blur license plates'),
+    h('label', { class: 'row small' }, faces, 'Blur faces'), note);
+  box.values = () => ({ blurPlates: plates.checked, blurFaces: faces.checked });
+  return box;
+}
+
+function shareForm(c, trim, video) {
+  const scope = h('select', {}, h('option', { value: 'all' }, 'The whole clip'), h('option', { value: 'trim' }, 'The part marked with Trim'));
+  const expiry = h('select', {}, [[1, '1 hour'], [24, '1 day'], [168, '7 days'], [720, '30 days']].map(([v, l]) => h('option', { value: v, selected: v === 24 }, l)));
+  const dl = h('input', { type: 'checkbox' });
+  const blur = blurOptions();
+  const result = h('div', { class: 'stack' });
+  const panel = h('div', { class: 'card stack', style: 'display:none;background:var(--panel2)' },
+    h('h3', { style: 'margin:0' }, 'Share a link'),
+    h('p', { class: 'muted small', style: 'margin:0' }, 'Anyone with the link can watch until it expires. It doesn’t show your car, your account or where the clip was recorded.'),
+    h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'Share'), scope, h('span', { class: 'small muted' }, 'for'), expiry),
+    h('label', { class: 'row small' }, dl, 'Allow downloading'),
+    blur,
+    h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: create }, 'Create link')),
+    result);
+  async function create() {
+    const body = { expiresHours: Number(expiry.value), allowDownload: dl.checked, ...blur.values() };
+    if (scope.value === 'trim') {
+      if (trim.start == null || trim.end == null || trim.end <= trim.start) return toast('Mark a start and end with Trim first.');
+      Object.assign(body, { start: trim.start, end: trim.end });
+    }
+    try {
+      const { data } = await api('POST', `/api/clips/${c.id}/share`, body);
+      const input = h('input', { type: 'text', value: data.url, readonly: true, style: 'flex:1;min-width:240px' });
+      const status = h('span', { class: 'small' });
+      const bar = progressBar();
+      result.replaceChildren(h('div', { class: 'row' }, input,
+        h('button', { class: 'btn small', onclick: async () => { input.select(); try { await navigator.clipboard.writeText(data.url); toast('Link copied.'); } catch { document.execCommand('copy'); } } }, 'Copy')),
+        status, ...(data.jobId ? [bar] : []));
+      status.textContent = `Expires ${fmtDateTime(data.expiresAt)}.`;
+      if (data.jobId) {
+        const j = await waitForJob(data.jobId, (j) => { bar.set(j.progress); status.textContent = `${j.step}… the link works once this finishes.`; });
+        bar.remove();
+        status.textContent = j.status === 'done' ? `Ready. Expires ${fmtDateTime(data.expiresAt)}.` : `Couldn’t prepare the video: ${j.error}`;
+      }
+    } catch (e) { toast(e.message); }
+  }
+  void video;
+  return panel;
+}
+
+/** Incident report for a car around a moment. */
+function reportDialog(carId, t) {
+  const span = (v) => h('select', {}, [[30, '30 seconds'], [60, '1 minute'], [120, '2 minutes'], [300, '5 minutes']].map(([s, l]) => h('option', { value: s, selected: s === v }, l)));
+  const before = span(60);
+  const after = span(60);
+  const note = h('textarea', { rows: 4, placeholder: 'What happened (optional). Included in the report.', style: 'width:100%' });
+  const blur = blurOptions();
+  const status = h('div', { class: 'stack' });
+  const go = h('button', { class: 'btn primary' }, 'Create report');
+  const body = h('div', { class: 'stack' },
+    h('h2', { style: 'margin:0' }, 'Incident report'),
+    h('p', { class: 'muted small', style: 'margin:0' }, `Around ${fmtDateTime(t)}. Includes footage from every camera in the car, a route map, a speed graph, events and your notes, as one ZIP. Open report.html inside it, or print it to PDF.`),
+    h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'From'), before, h('span', { class: 'small muted' }, 'before to'), after, h('span', { class: 'small muted' }, 'after')),
+    note, blur, h('div', { class: 'row' }, go), status);
+  const close = modal(body);
+  go.onclick = async () => {
+    go.disabled = true;
+    try {
+      const { data } = await api('POST', '/api/reports', { carId, t, beforeS: Number(before.value), afterS: Number(after.value), note: note.value, units: useMph() ? 'mph' : 'kmh', ...blur.values() });
+      const bar = progressBar();
+      const step = h('span', { class: 'small' }, 'Starting…');
+      status.replaceChildren(step, bar);
+      const j = await waitForJob(data.jobId, (j) => { bar.set(j.progress); step.textContent = j.step; });
+      if (j.status === 'done') {
+        status.replaceChildren(h('span', { class: 'small' }, `Ready: ${j.result.clips} video file${j.result.clips === 1 ? '' : 's'}${j.result.hasRoute ? ' and the route' : ''}. Available for a day.`),
+          h('a', { class: 'btn primary', href: j.result.downloadUrl }, 'Download report'));
+      } else {
+        status.replaceChildren(h('span', { class: 'error' }, `Couldn’t create the report: ${j.error}`));
+        go.disabled = false;
+      }
+    } catch (e) { toast(e.message); go.disabled = false; }
+  };
+  void close;
+}
+
+async function sharedLinksCard() {
+  const card = h('div', { class: 'card stack', style: 'max-width:760px;margin-top:1rem' }, h('h2', {}, 'Shared links'));
+  const { data } = await api('GET', '/api/shares');
+  card.append(data.length
+    ? h('div', { class: 'stack' }, data.map((s) => h('div', { class: 'row' },
+      h('div', { class: 'grow' }, h('div', {}, s.clipName || 'Clip', s.start != null ? h('span', { class: 'muted small' }, ` · ${fmtSecs(s.start)}–${fmtSecs(s.end)}`) : null),
+        h('div', { class: 'muted small' }, [`Expires ${fmtDateTime(s.expiresAt)}`, `${s.views} view${s.views === 1 ? '' : 's'}`, s.allowDownload ? 'download allowed' : null,
+          s.blurPlates ? 'plates blurred' : null, s.blurFaces ? 'faces blurred' : null, s.status !== 'ready' ? s.status : null].filter(Boolean).join(' · '))),
+      h('button', { class: 'btn small', onclick: async () => { try { await navigator.clipboard.writeText(s.url); toast('Link copied.'); } catch { prompt('Copy this link:', s.url); } } }, 'Copy'),
+      h('button', { class: 'btn small danger', onclick: async () => { await api('DELETE', `/api/shares/${s.token}`); toast('Link turned off.'); render(); } }, 'Turn off'))))
+    : h('p', { class: 'muted small' }, 'No active links. Share a clip from its player.'));
   return card;
 }
 
@@ -1518,6 +1943,7 @@ async function pageSettings(main) {
 
   main.append(await twoFactorCard());
   main.append(await devicesCard());
+  main.append(await sharedLinksCard());
   main.append(auditCard());
   main.append(notificationsCard());
 

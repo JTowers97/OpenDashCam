@@ -22,7 +22,7 @@ Free and open source. No accounts, no cloud, no ads, no tracking.
   after a jolt
 - Always records in landscape; the recording screen dims to minimum brightness (tap to wake) or you
   can turn the screen off. ODC checks whether your phone keeps recording with the screen off and tells you
-- Optional **date/time stamp burned into the video**, with speed and GPS coordinates if you like
+- Optional **date/time stamp burned into the video**, with speed, GPS coordinates and your plate if you like
 - Clock corrected automatically using GPS time (or your ODC Server), so timestamps are accurate and
   multiple phones in one car line up
 - Audio off by default
@@ -68,8 +68,18 @@ Free and open source. No accounts, no cloud, no ads, no tracking.
 - Timeline of all footage with thumbnails, sorting and filters, playable in any browser
 - Live map of each car, route history and automatically detected trips with place names
 - **Map View** of your clips in the app: see where each clip was recorded and play it
+- **Where I parked:** the car's last position on a map, with directions and sharing
+- **Quick Settings tile and home-screen widget** to start and stop recording
+- **Bulk actions:** select many clips to lock, unlock, keep, encrypt or delete
 - **All cameras** in the app: play a car's cameras side by side, in sync, streamed from the server
 - **Synced playback** of all of a car's cameras side by side
+- **Calendar view** of footage, **bulk actions** (lock, delete, download as ZIP), **clip trimming**, and a
+  **trip logbook** export (CSV) for mileage records
+- A **getting-started checklist** for new installs
+- **Arrival alerts** at places you mark on the map, **speed alerts**, and **impact alerts with a photo**
+- Optional **driving events**: hard braking, hard acceleration and sharp turns, on trips and in Events
+- **Expiring share links** and **incident reports** (all cameras, route map, speed graph, notes), with
+  optional blurring of license plates and faces done on your server
 - Sharing with family members, two-factor sign-in, signed-in devices, an activity log, daily database
   backups, alerts as browser notifications or via ntfy
 - Retention per car and storage limits per person; play phone-encrypted clips with your passphrase
@@ -126,7 +136,8 @@ exist (Settings → Secrets and variables → Actions); until then it publishes 
 
 Create a key once with `keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 4096 -validity 10000 -alias odc`
 and encode it with `base64 -w0 release.jks` (Linux/macOS) or
-`[Convert]::ToBase64String([IO.File]::ReadAllBytes("release.jks"))` (PowerShell). Keep the file and
+`[Convert]::ToBase64String([IO.File]::ReadAllBytes((Resolve-Path .\release.jks))) | Set-Clipboard`
+(PowerShell, from the folder containing `release.jks`; copies the result to the clipboard). Keep the file and
 passwords safe and private: without them you can never publish an update to installed copies.
 
 **Switching keys:** Android only installs an update signed with the same key as the installed app. Moving
@@ -160,30 +171,12 @@ Planned features, in no particular order:
 
 - **Live view on demand:** look through a car's camera from the ODC Server (for example after an impact
   alert while parked)
-- **Impact snapshots:** impact alerts include a photo from that moment
-- **Incident reports:** one export with clips from all cameras around an event, a route map, a speed graph,
-  time and place, ready for an insurer or police report
-- **Expiring share links:** share a clip without an account, through a link that stops working after a set time
-- **Optional blurring when sharing or exporting:** separate checkboxes to blur license plates and faces,
-  done on the server, off unless you choose them
-- **Arrival alerts:** a notification when a car arrives at a place you mark on the map
-- **Speed alerts:** a notification when a car goes over a speed you set
-- **License plate in the stamp:** optionally show your own car's plate in the date/time stamp
-- **Trip logbook export:** trips and distances as a spreadsheet file, for mileage records
-- **Driving events (optional):** hard braking, hard acceleration and sharp turns marked on the timeline,
-  detected from the phone's GPS and motion sensor. Only as reliable as the phone's sensors and mounting
 - **Home Assistant integration:** car location, presence and alerts in Home Assistant
 - **Viofo dashcam import:** Viofo cameras on your home Wi-Fi sync their recordings (with GPS) to the ODC
   Server automatically, alongside phone footage
-- **Clip trimming:** cut out just the part that matters before sharing or exporting
-- **Parking spot:** "Where did I park?" in the app, from the car's last known position
-- **Bulk actions:** select many clips at once to lock, delete, encrypt or download, in the app and on the server
-- **Setup checklist:** a getting-started list on the server's home page for new installs
-- **Calendar view:** see at a glance which days have footage, and jump to them
 - **App lock (optional):** require your fingerprint, face or screen lock to open clips and settings
 - **Custom themes (optional):** choose colors and light/dark appearance in the app and the web app
 - **Accessibility settings (optional):** larger text and controls, higher contrast, and screen reader support
-- **Quick Settings tile and widget:** start and stop recording from Android's pull-down menu or the home screen
 
 Suggestions and bug reports are welcome in [Issues](../../issues).
 

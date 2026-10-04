@@ -103,3 +103,28 @@ th { color: var(--muted); font-weight: 500; font-size: .85rem; }
 @media (max-width: 900px) { .sync-bottom { grid-template-columns: 1fr; } }
 .speed-big { font-size: 1.6rem; font-weight: 700; }
 .codes { font-family: ui-monospace, monospace; display: grid; grid-template-columns: repeat(2, auto); gap: .25rem 1.5rem; width: fit-content; }
+
+/* Bulk selection */
+.selecting .tile { position: relative; }
+.selecting .tile::after { content: ''; position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.35); }
+.selecting .tile.picked { border-color: var(--accent); }
+.selecting .tile.picked::after { background: var(--accent); border-color: var(--accent); content: '✓'; color: var(--accent-ink); font-weight: 700; display: grid; place-items: center; font-size: .8rem; }
+.bulkbar { position: sticky; bottom: 0; margin-top: 1rem; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: .6rem .8rem; box-shadow: 0 -4px 16px rgba(0,0,0,.4); }
+
+/* Calendar */
+.cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; max-width: 900px; }
+.cal-head { color: var(--muted); font-size: .8rem; text-align: center; }
+.cal-cell { position: relative; min-height: 76px; border: 1px solid var(--line); border-radius: 8px; padding: .35rem .45rem; background: var(--panel); color: var(--text); }
+.cal-cell.empty { border: 0; background: transparent; }
+.cal-cell.has { background: color-mix(in srgb, var(--accent) calc(var(--level) * 45%), var(--panel)); }
+.cal-cell.has:hover { border-color: var(--accent); }
+.cal-cell.today { outline: 2px solid var(--accent); }
+.cal-num { font-weight: 700; }
+.cal-info { font-size: .72rem; line-height: 1.2; margin-top: .2rem; }
+.cal-impact { position: absolute; top: .3rem; right: .4rem; font-size: .8rem; }
+@media (max-width: 760px) { .cal-cell { min-height: 54px; padding: .25rem; } .cal-info { display: none; } }
+
+.progress { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
+.progress > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+
+.event-marker { background: var(--panel); border: 2px solid var(--accent); border-radius: 50%; width: 26px; height: 26px; display: grid; place-items: center; font-size: 13px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.4); }
