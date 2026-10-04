@@ -1,5 +1,9 @@
 # Changelog
 
+## App 0.9.1
+- Fixed: clips recorded with the 0.9.0 engine were rotated 90° and squashed. Recordings now use the camera
+  image exactly as the sensor delivers it, as before 0.9.0
+
 ## App 0.9.0 · Server 0.9.0
 - **App:** crash-resistant recording. Clips are written as fragmented MP4 and saved continuously, so a crash
   or power loss costs at most about a second; clip lengths are now exact. New recording engine (camera →
