@@ -62,6 +62,7 @@ class OverlayRenderer(
     private lateinit var surfaceTexture: SurfaceTexture
     private lateinit var inputSurface: Surface
     private val texMatrix = FloatArray(16)
+    private val stMatrix = FloatArray(16)
     private var stampVerts: FloatBuffer? = null
     private var lastSecond = -1L
     private val fullQuad = makeFullQuad() // per renderer: each camera draws on its own thread
@@ -173,7 +174,8 @@ class OverlayRenderer(
             // Normal video keeps the camera's timestamps; time-lapse plays kept frames back to back.
             val pts = if (interval != null) firstTs + keptFrames * 1_000_000_000L / outputFps else ts
             keptFrames++
-            surfaceTexture.getTransformMatrix(texMatrix)
+            surfaceTexture.getTransformMatrix(stMatrix)
+            sensorMatrix(stMatrix, texMatrix)
             GLES20.glViewport(0, 0, width, height)
 
             // Camera frame, full size.
@@ -207,6 +209,31 @@ class OverlayRenderer(
         } catch (e: Exception) {
             Log.w(TAG, "frame failed: ${e.message}")
         }
+    }
+
+    /**
+     * For camera output going to the GPU, Android rotates (and for the front camera mirrors) frames so a
+     * preview looks upright on screen. A recording must use the frame as the sensor delivers it (the
+     * file's rotation flag turns it upright on playback), so keep only the matrix's crop and vertical
+     * flip and drop its rotation/mirroring. Rotations by multiples of 90° map the crop rectangle onto
+     * itself, so the crop is read from where the corners land.
+     */
+    private fun sensorMatrix(st: FloatArray, out: FloatArray) {
+        var sMin = Float.MAX_VALUE; var sMax = -Float.MAX_VALUE
+        var tMin = Float.MAX_VALUE; var tMax = -Float.MAX_VALUE
+        for (cs in 0..1) for (ct in 0..1) {
+            val sx = st[0] * cs + st[4] * ct + st[12]
+            val ty = st[1] * cs + st[5] * ct + st[13]
+            sMin = minOf(sMin, sx); sMax = maxOf(sMax, sx)
+            tMin = minOf(tMin, ty); tMax = maxOf(tMax, ty)
+        }
+        java.util.Arrays.fill(out, 0f)
+        out[0] = sMax - sMin          // s' = sMin + s * width
+        out[5] = -(tMax - tMin)       // t' = tMax - t * height (vertical flip: buffer row 0 at the top)
+        out[10] = 1f
+        out[12] = sMin
+        out[13] = tMax
+        out[15] = 1f
     }
 
     /** Interleaved x, y, s, t for a 4-vertex triangle strip. */
