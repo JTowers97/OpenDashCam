@@ -2,7 +2,8 @@
 FROM node:22-alpine
 
 # ffmpeg: thumbnails, video info, H.265 -> H.264 conversion. tini: clean shutdown.
-RUN apk add --no-cache ffmpeg tini
+# exiftool reads GPS embedded in dashcam videos (Viofo import)
+RUN apk add --no-cache ffmpeg tini exiftool
 
 # Place names: GeoNames city data (CC BY 4.0, geonames.org), downloaded at build time so lookups
 # happen on your server. If the download fails, the server still works without place names.

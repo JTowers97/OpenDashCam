@@ -19,6 +19,8 @@ import { maybeBackup } from './backup.js';
 import { purgeAudit } from './audit.js';
 import { deleteShareFiles, purgeExpiredShares } from './shares.js';
 import { cleanReports } from './reports.js';
+import { haShutdown, haTick } from './homeassistant.js';
+import { viofoTick } from './viofo.js';
 import { notify } from './notify.js';
 
 for (const d of [config.dataDir, config.libraryDir, config.uploadsDir, config.cacheDir]) fs.mkdirSync(d, { recursive: true });
@@ -214,6 +216,8 @@ app.analyzeNow = () => { analyzeLoop(); };
 every(Number(process.env.ODC_INDEX_INTERVAL_MS) || 30_000, analyzeLoop);
 every(3600_000, () => { enforceRetention(); cleanUploads(); learnAllPlaces(); purgeOldPlates(db); });
 every(10 * 60_000, cleanDecrypted);
+every(Number(process.env.ODC_VIOFO_INTERVAL_MS) || 120_000, () => viofoTick(db, app));
+every(Number(process.env.ODC_HA_INTERVAL_MS) || 5000, () => { try { haTick(db); } catch (e) { console.warn('Home Assistant:', e.message); } });
 every(3600_000, () => {
   purgeAudit(db, getSettings(db).auditRetentionDays);
   purgeExpiredShares(db);
@@ -306,6 +310,6 @@ server.listen(config.port, () => {
   console.log(`Open Dash Cam server ${config.version} listening on port ${config.port} (data: ${config.dataDir})`);
 });
 
-const shutdown = () => { secureServer.close(); server.close(() => process.exit(0)); };
+const shutdown = () => { haShutdown(db); secureServer.close(); server.close(() => process.exit(0)); };
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

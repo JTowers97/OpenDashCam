@@ -161,6 +161,65 @@ specific date range or car first, retry clips that failed, or analyze clips agai
 needs about 1.5 GB of RAM. Without a GPU, analysis
 takes roughly a second or two per minute of footage on a typical home server; searching is instant.
 
+## Home Assistant (optional)
+
+ODC can publish each car to Home Assistant over MQTT. Cars appear automatically (MQTT discovery) as
+devices with:
+- a **location** tracker (works with Home Assistant zones such as "home")
+- **speed**, **last seen** and **phone battery** sensors, and **recording** and **moving** binary sensors
+- an **alert** event entity for impacts, arrivals and departures, speeding, a camera going offline,
+  overheating, battery cutoff and driving events
+
+Setup:
+1. In Home Assistant, install an MQTT broker (for example the Mosquitto broker add-on) and the MQTT
+   integration, and create a user for ODC.
+2. In ODC, open Settings → Home Assistant (MQTT), turn it on, and enter the broker address
+   (`mqtt://<broker-ip>:1883`, or `mqtts://` for TLS), username and password. The status line shows
+   whether ODC is connected.
+
+The entities show up under Settings → Devices & services → MQTT. Example automation (a notification with
+the event details when a car reports an impact):
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: event.my_car_alert
+conditions:
+  - condition: state
+    entity_id: event.my_car_alert
+    attribute: event_type
+    state: impact
+actions:
+  - action: notify.notify
+    data:
+      message: "Impact: {{ trigger.to_state.attributes.message }}"
+```
+
+Location data goes only to your own broker. Topics start with `opendashcam/` (changeable); discovery uses
+the `homeassistant/` prefix.
+
+## Viofo dashcam import (optional)
+
+ODC can import recordings from Viofo dashcams with Wi-Fi when the car is home. Each lens (front, rear,
+interior) becomes a camera of the car, event (RO) recordings arrive locked, parking recordings are marked as
+parking, and the GPS recorded in the video is used for the map, trips, place names and alerts, like phone
+footage.
+
+Requirements:
+- A Viofo dashcam with Wi-Fi **station mode** (it joins your home Wi-Fi). Keeping station mode on
+  automatically may need special firmware from Viofo support
+- A fixed address for the camera on your network (a DHCP reservation in your router)
+- Power while parked (for example a hardwire kit), so the camera is on when it's in range
+
+Setup: on the Cars page, open the car, enter the camera's address under **Viofo dashcam**, choose which
+recordings to import, save, and use **Check camera**. ODC then checks every 2 minutes and imports new
+recordings, newest first. Interrupted downloads resume. The newest normal and parking recording is imported
+once the camera has started the next one, since it may still be recording.
+
+GPS is read with ExifTool (included in the Docker image). The camera's own file names use its clock; when the
+video contains GPS, ODC uses GPS time instead. Tested against Viofo's documented Wi-Fi interface; models and
+firmware vary, so check the first imports.
+
 ## Blurring plates and faces (optional)
 
 Share links and incident reports can blur license plates and faces. This runs in the ML container (the

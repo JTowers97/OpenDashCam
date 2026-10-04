@@ -1325,6 +1325,38 @@ function carCard(car) {
     card.append(h('h3', {}, 'When cameras disagree on location or speed'), h('div', { class: 'row' }, pol, truth));
   }
 
+  // Viofo dashcam import
+  if (manage) {
+    const addr = h('input', { type: 'text', value: (car.viofoUrl || '').replace(/^http:\/\//, ''), placeholder: 'e.g. 192.168.1.60', style: 'width:200px' });
+    const folderBox = (key, label) => {
+      const b = h('input', { type: 'checkbox', checked: car.viofoFolders.includes(key) });
+      b.dataset.key = key;
+      return h('label', { class: 'row small' }, b, label);
+    };
+    const boxes = [folderBox('movie', 'Normal recordings'), folderBox('parking', 'Parking recordings'), folderBox('ro', 'Event (locked) recordings')];
+    const st = car.viofoStatus;
+    const status = h('div', { class: 'small' }, st ? `${st.message} (${ago(st.at)})` : car.viofoUrl ? 'Not checked yet.' : '');
+    card.append(h('h3', {}, 'Viofo dashcam'),
+      h('p', { class: 'muted small' }, 'Imports recordings from a Viofo dashcam whenever it’s on your Wi-Fi, with GPS, as clips of this car. The camera must be in Wi-Fi station mode (joined to your network) with a fixed address; keeping station mode on may need special firmware from Viofo support.'),
+      h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'Camera address'), addr),
+      h('div', { class: 'row' }, boxes),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn small', onclick: async () => {
+          try {
+            await api('PATCH', `/api/cars/${car.id}`, { viofoUrl: addr.value.trim(), viofoFolders: boxes.map((l) => l.querySelector('input')).filter((b) => b.checked).map((b) => b.dataset.key) });
+            toast(addr.value.trim() ? 'Saved. ODC checks the camera every 2 minutes.' : 'Viofo import turned off.');
+          } catch (e) { toast(e.message); }
+        } }, 'Save'),
+        car.viofoUrl ? h('button', { class: 'btn small', onclick: async () => {
+          status.textContent = 'Checking…';
+          try {
+            const r = await api('POST', `/api/cars/${car.id}/viofo/check`);
+            status.textContent = `✓ Camera found: ${r.data.files} recordings on its card, ${r.data.imported} imported so far. Importing new ones now.`;
+          } catch (e) { status.textContent = e.message; }
+        } }, 'Check camera') : null),
+      status);
+  }
+
   // Speed alert
   if (manage) {
     const mph = useMph();
@@ -1472,6 +1504,18 @@ async function serverSettingsForm(onSaved) {
 
   const smartStatus = h('div', { class: 'stack' });
   const tlsInfo = h('div', { class: 'muted small' });
+  const haStatusLine = h('div', { class: 'small' });
+  const refreshHa = async () => {
+    try {
+      const { data } = await api('GET', '/api/integrations');
+      const ha = data.homeAssistant;
+      haStatusLine.textContent = !ha.enabled ? '' : ha.connected ? '✓ Connected to the broker.' : `Not connected: ${ha.error}`;
+      haStatusLine.style.color = ha.enabled && !ha.connected ? 'var(--warn)' : '';
+    } catch { /* not an admin */ }
+  };
+  refreshHa();
+  const haTimer = setInterval(refreshHa, 4000);
+  state.cleanup.push(() => clearInterval(haTimer));
   api('GET', '/api/tls').then(({ data }) => {
     tlsInfo.replaceChildren(
       `Built-in HTTPS is on port ${data.httpsPort} inside the container (map it in docker-compose.yml to use it). Browsers will warn once about its certificate; phones trust it automatically after pairing, but the app’s video player needs a publicly trusted certificate: for that, use the optional automatic Let’s Encrypt setup described in the server README. Certificate fingerprint: `,
@@ -1611,6 +1655,15 @@ async function serverSettingsForm(onSaved) {
     field('mlUrl', 'ML service address', 'url'),
     field('searchFrameIntervalSec', 'Analyze one frame every (seconds)', 'number', 'Lower finds brief moments more reliably but takes longer. Default 10.'),
     smartStatus,
+    h('h3', {}, 'Home Assistant (MQTT)'),
+    h('div', { class: 'muted small' }, 'Each car appears in Home Assistant as a device with its location, speed, recording and battery, plus an event for impacts, arrivals, speeding and more. Needs an MQTT broker (e.g. the Mosquitto add-on) and Home Assistant’s MQTT integration; entities are created automatically.'),
+    h('label', { class: 'row' }, field('mqttEnabled', '', 'checkbox').querySelector('input'), 'Send to Home Assistant'),
+    field('mqttUrl', 'Broker address', 'text', 'For example mqtt://192.168.1.10:1883, or mqtts://… for TLS.'),
+    field('mqttUsername', 'Username', 'text'),
+    field('mqttPassword', 'Password', 'password'),
+    field('mqttPrefix', 'Topic prefix', 'text', 'Default: opendashcam'),
+    field('mqttDiscoveryPrefix', 'Discovery prefix', 'text', 'Default: homeassistant (change only if you changed it in Home Assistant).'),
+    haStatusLine,
     h('h3', {}, 'Driving events'),
     h('label', { class: 'row' }, field('drivingEvents', '', 'checkbox').querySelector('input'), 'Mark hard braking, hard acceleration and sharp turns'),
     field('drivingSensitivity', 'Sensitivity', 'select', null, [['low', 'Low (only very hard events)'], ['normal', 'Normal'], ['high', 'High (more events)']]),

@@ -253,6 +253,16 @@ CREATE TABLE IF NOT EXISTS alert_places (
   created_at INTEGER NOT NULL
 );
 
+-- Recordings already imported from a Viofo dashcam (so each is fetched once).
+CREATE TABLE IF NOT EXISTS viofo_files (
+  car_id INTEGER NOT NULL REFERENCES cars(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  size INTEGER,
+  clip_id TEXT,
+  imported_at INTEGER NOT NULL,
+  PRIMARY KEY (car_id, path)
+);
+
 CREATE TABLE IF NOT EXISTS recovery_codes (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   code_hash TEXT NOT NULL,
@@ -277,7 +287,10 @@ const COLUMNS = [
   ['users', 'quota_gb', 'REAL'],                // null = no per-person limit (cars they own)
   ['sessions', 'user_agent', 'TEXT'],
   ['clips', 'trimmed_from', 'TEXT'],
-  ['cars', 'speed_alert_kmh', 'REAL'],        // null = no speed alert          // id of the clip a trimmed copy was cut from
+  ['cars', 'speed_alert_kmh', 'REAL'],        // null = no speed alert
+  ['cars', 'viofo_url', 'TEXT'],              // Viofo dashcam address on the home network, e.g. http://192.168.1.60
+  ['cars', 'viofo_folders', 'TEXT'],          // which folders to import: movie,parking,ro
+  ['cars', 'viofo_status', 'TEXT'],           // JSON: last check result          // id of the clip a trimmed copy was cut from
   ['sessions', 'ip', 'TEXT'],
   ['sessions', 'last_used_at', 'INTEGER'],
 ];
@@ -343,6 +356,12 @@ export const DEFAULT_SETTINGS = {
   backupHour: 3,
   backupKeep: 7,
   auditRetentionDays: 365,
+  mqttEnabled: false,
+  mqttUrl: '',                    // mqtt://broker:1883 or mqtts://broker:8883
+  mqttUsername: '',
+  mqttPassword: '',
+  mqttPrefix: 'opendashcam',
+  mqttDiscoveryPrefix: 'homeassistant',
   drivingEvents: false,
   drivingSensitivity: 'normal',   // low | normal | high
   plateSearch: false,

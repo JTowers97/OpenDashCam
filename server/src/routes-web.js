@@ -22,6 +22,8 @@ import { WrongPassphrase, decryptFile } from './crypto-odcenc.js';
 import { registerShareRoutes } from './shares.js';
 import { registerReportRoutes } from './reports.js';
 import { snapshotPath } from './snapshots.js';
+import { haStatus } from './homeassistant.js';
+import { importCar, listFiles } from './viofo.js';
 import { indexerState, indexStats, mlHealth, resetIndex, runIndexer, visualSearch } from './search.js';
 import {
   erasePlates, mergePlates, normalizePlate, plateCrop, plateLog, plateStats, purgeOldPlates, runPlateIndexer, searchPlates, similarPlates,
@@ -362,6 +364,7 @@ export function registerWebRoutes(router, app) {
       id: car.id, name: car.name, owner: owner?.username, role: carRole(db, user, car.id),
       mismatchPolicy: car.mismatch_policy, truthCameraId: car.truth_camera_id,
       retentionDays: car.retention_days, storageCapGb: car.storage_cap_gb, speedAlertKmh: car.speed_alert_kmh,
+      viofoUrl: car.viofo_url || null, viofoFolders: (car.viofo_folders || 'movie,parking,ro').split(','), viofoStatus: safeJson(car.viofo_status),
       cameras, shares, clipCount: stats.n, clipBytes: stats.bytes, lastClipAt: stats.last,
       live: carLive(db, car),
     };
@@ -394,6 +397,17 @@ export function registerWebRoutes(router, app) {
     if (b.mismatchPolicy !== undefined) {
       if (!['alert', 'source', 'average'].includes(b.mismatchPolicy)) throw new HttpError(400, 'Invalid policy');
       db.run('UPDATE cars SET mismatch_policy = ? WHERE id = ?', b.mismatchPolicy, id);
+    }
+    if (b.viofoUrl !== undefined) {
+      let v = String(b.viofoUrl || '').trim().replace(/\/$/, '');
+      if (v && !/^https?:\/\//i.test(v)) v = `http://${v}`;
+      if (v) { try { new URL(v); } catch { throw new HttpError(400, 'Enter the camera’s address, e.g. 192.168.1.60'); } }
+      db.run('UPDATE cars SET viofo_url = ?, viofo_status = NULL WHERE id = ?', v || null, id);
+      audit(db, { user: u, action: v ? 'Viofo import set up' : 'Viofo import turned off', target: db.get('SELECT name FROM cars WHERE id = ?', id)?.name, ip: ctx.ip, detail: v || null });
+    }
+    if (b.viofoFolders !== undefined) {
+      const f = (Array.isArray(b.viofoFolders) ? b.viofoFolders : []).filter((x) => ['movie', 'parking', 'ro'].includes(x));
+      db.run('UPDATE cars SET viofo_folders = ? WHERE id = ?', (f.length ? f : ['movie', 'parking', 'ro']).join(','), id);
     }
     if (b.speedAlertKmh !== undefined) {
       const v = b.speedAlertKmh === null || b.speedAlertKmh === '' || Number(b.speedAlertKmh) <= 0 ? null : Math.min(400, Number(b.speedAlertKmh));
@@ -1241,6 +1255,31 @@ export function registerWebRoutes(router, app) {
     const file = snapshotPath(id);
     if (!fs.existsSync(file)) throw new HttpError(404, 'No photo');
     serveFile(ctx, file, 'image/jpeg', { 'Cache-Control': 'private, max-age=86400' });
+  });
+
+  // ---------------------------------------------------------------- integrations
+
+  router.add('GET', '/api/integrations', (ctx) => {
+    requireAdmin(ctx);
+    send(ctx.res, 200, { homeAssistant: haStatus() });
+  });
+
+  /** Checks a car's Viofo camera now (lists its files; imports a first batch in the background). */
+  router.add('POST', '/api/cars/:id/viofo/check', async (ctx) => {
+    const u = requireUser(ctx);
+    const id = Number(ctx.params.id);
+    requireCarRole(db, u, id, true);
+    const car = db.get('SELECT * FROM cars WHERE id = ?', id);
+    if (!car.viofo_url) throw new HttpError(400, 'Enter the camera’s address first.');
+    let files;
+    try {
+      files = await listFiles(car.viofo_url.replace(/\/$/, ''), (car.viofo_folders || 'movie,parking,ro').split(','));
+    } catch (e) {
+      throw new HttpError(502, `Couldn’t reach the camera: ${e.message}`);
+    }
+    const already = db.get('SELECT COUNT(*) n FROM viofo_files WHERE car_id = ?', id).n;
+    importCar(db, app, car).catch(() => {});
+    send(ctx.res, 200, { files: files.length, imported: already, newest: files[0]?.name ?? null });
   });
 
   // ---------------------------------------------------------------- arrival alert places

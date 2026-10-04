@@ -344,11 +344,12 @@ export function carLive(db, car) {
       lon += r.lon * w;
       speed += (r.speed ?? 0) * w;
     }
-    pos = { t: fresh[0].t, lat: lat / wsum, lon: lon / wsum, speed: speed / wsum, course: fresh[0].course, source: 'average' };
+    const accs = fresh.map((r) => r.acc).filter((v) => v != null);
+    pos = { t: fresh[0].t, lat: lat / wsum, lon: lon / wsum, speed: speed / wsum, course: fresh[0].course, acc: accs.length ? Math.min(...accs) : null, source: 'average' };
   } else {
     const truth = car.truth_camera_id && rows.find((r) => r.camera_id === car.truth_camera_id);
     const r = (car.mismatch_policy === 'source' && truth) || fresh[0] || rows[0];
-    pos = { t: r.t, lat: r.lat, lon: r.lon, speed: r.speed, course: r.course, source: r.camera_id };
+    pos = { t: r.t, lat: r.lat, lon: r.lon, speed: r.speed, course: r.course, acc: r.acc, source: r.camera_id };
   }
   return { ...pos, live: now() - pos.t < FRESH_MS, mismatch: car.mismatch_policy === 'alert' ? active : null };
 }
