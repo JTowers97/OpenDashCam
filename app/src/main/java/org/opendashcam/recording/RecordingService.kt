@@ -109,7 +109,9 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     // ---- control-thread state
-    private val recorders = mutableListOf<CameraStreamRecorder>()
+    // Read from other threads (live view), so a list that's safe to read while it changes.
+    private val recorders = java.util.concurrent.CopyOnWriteArrayList<CameraStreamRecorder>()
+    private val liveView by lazy { org.opendashcam.liveview.LiveViewClient(this, settings) { recorders.toList() } }
     private var mode = Mode.DRIVING
     private var degraded = false
     private var fallbackLevel = 0
@@ -246,6 +248,7 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
             return
         }
         running = false
+        liveView.stop()
         saveParkingSpot()
         unregisterMonitors()
         stopSensors()
@@ -295,6 +298,7 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
 
     private fun startRecorders() {
         if (!running) return
+        liveView.start()
         OverlayData.showSpeed = settings.overlaySpeed
         OverlayData.showCoords = settings.overlayCoords
         OverlayData.plate = settings.ownPlate.trim().uppercase().takeIf { settings.overlayPlate && it.isNotEmpty() }

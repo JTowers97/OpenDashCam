@@ -4,7 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -30,7 +30,7 @@ import org.opendashcam.tracking.TrackingService
 
 enum class Screen { ONBOARDING, HOME, SETTINGS, CLIPS, PRIVACY_ZONES, SERVER_CLIPS, SERVER_MAP, SERVER_SYNC, PARKING }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     private lateinit var settings: OdcSettings
 
     /** Incremented each time an auto-start (charging / Bluetooth) opens this screen. */
@@ -40,10 +40,21 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         settings = OdcSettings(this)
+        Appearance.load(settings)
         handleIntent(intent, fresh = savedInstanceState == null)
         setContent {
             OdcTheme { OdcRoot(settings, autoStartRequests) }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        AppLock.onStart(settings)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        AppLock.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -103,17 +114,26 @@ fun OdcRoot(settings: OdcSettings, autoStartRequests: Int) {
     }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        if (screen in PROTECTED_SCREENS && settings.appLock && AppLock.locked.value) {
+            LockedScreen(onBack = { screen = Screen.HOME })
+            return@Surface
+        }
         when (screen) {
             Screen.ONBOARDING -> OnboardingScreen(settings) { customize ->
                 screen = if (customize) Screen.SETTINGS else Screen.HOME
             }
-            Screen.HOME -> HomeScreen(
-                settings,
-                autoStartRequests = autoStartRequests,
-                onOpenSettings = { screen = Screen.SETTINGS },
-                onOpenClips = { screen = Screen.CLIPS },
-                onOpenParking = { screen = Screen.PARKING },
-            )
+            // The recording screen stays dark whatever the theme: it's used in the car, often at night.
+            Screen.HOME -> OdcTheme(forceDark = true) {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    HomeScreen(
+                        settings,
+                        autoStartRequests = autoStartRequests,
+                        onOpenSettings = { screen = Screen.SETTINGS },
+                        onOpenClips = { screen = Screen.CLIPS },
+                        onOpenParking = { screen = Screen.PARKING },
+                    )
+                }
+            }
             Screen.PARKING -> ParkingScreen(settings, onBack = { screen = Screen.HOME }, modifier = Modifier.safeDrawingPadding())
             Screen.SETTINGS -> SettingsScreen(
                 settings,

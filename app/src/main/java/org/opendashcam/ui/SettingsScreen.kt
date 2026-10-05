@@ -559,6 +559,64 @@ fun SettingsScreen(
         }
 
         // ------------------------------------------------------------ About
+        SectionHeader("Display and accessibility")
+        ChoiceRow(
+            title = "Theme",
+            options = listOf("dark", "light", "system"),
+            selected = settings.themeMode,
+            label = { mapOf("dark" to "Dark", "light" to "Light", "system" to "Same as phone")[it]!! },
+            onSelect = { v -> set { settings.themeMode = v; Appearance.load(settings) } },
+            subtitle = "The recording screen always stays dark, for driving at night.",
+        )
+        ChoiceRow(
+            title = "Accent color",
+            options = ACCENTS.keys.toList() + listOfNotNull(if (android.os.Build.VERSION.SDK_INT >= 31) "dynamic" else null),
+            selected = settings.accent,
+            label = { if (it == "dynamic") "From wallpaper" else it.replaceFirstChar { c -> c.uppercase() } },
+            onSelect = { v -> set { settings.accent = v; Appearance.load(settings) } },
+        )
+        ChoiceRow(
+            title = "Text size",
+            options = listOf("1.0", "1.15", "1.3"),
+            selected = settings.textScale,
+            label = { mapOf("1.0" to "Default", "1.15" to "Large", "1.3" to "Larger")[it]!! },
+            onSelect = { v -> set { settings.textScale = v; Appearance.load(settings) } },
+            subtitle = "On top of the phone's own font size setting.",
+        )
+        SwitchRow(
+            title = "High contrast",
+            checked = settings.highContrast,
+            onChange = { on -> set { settings.highContrast = on; Appearance.load(settings) } },
+            subtitle = "Stronger text and outlines.",
+        )
+
+        SectionHeader("App lock")
+        val lockActivity = LocalContext.current as? androidx.fragment.app.FragmentActivity
+        SwitchRow(
+            title = "Lock clips, maps and settings",
+            checked = settings.appLock,
+            onChange = { on ->
+                if (!on) {
+                    lockActivity?.let { act -> AppLock.prompt(act, "Turn off app lock") { ok -> if (ok) set { settings.appLock = false } } }
+                } else if (lockActivity == null || !AppLock.available(lockActivity)) {
+                    android.widget.Toast.makeText(context, "Set up a screen lock (PIN, pattern, password, fingerprint or face) on the phone first.", android.widget.Toast.LENGTH_LONG).show()
+                } else {
+                    // Confirm once so nobody can lock themselves out.
+                    AppLock.prompt(lockActivity, "Turn on app lock") { ok -> if (ok) set { settings.appLock = true } }
+                }
+            },
+            subtitle = "Needs your fingerprint, face or screen lock to open clips, maps, the parking spot and settings. Recording can always be started and stopped without unlocking.",
+        )
+        if (settings.appLock) {
+            ChoiceRow(
+                title = "Lock again after leaving the app for",
+                options = listOf(0, 1, 5, 15),
+                selected = settings.appLockTimeoutMin,
+                label = { if (it == 0) "Right away" else "$it min" },
+                onSelect = { v -> set { settings.appLockTimeoutMin = v } },
+            )
+        }
+
         SectionHeader("About")
         Text("Open Dash Cam ${AppVersion.full}", style = MaterialTheme.typography.bodyLarge)
         Hint("Free software under the GNU GPL v3.")

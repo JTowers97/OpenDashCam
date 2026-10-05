@@ -66,9 +66,13 @@ class OverlayRenderer(
     private var stampVerts: FloatBuffer? = null
     private var lastSecond = -1L
     @Volatile private var snapshotRequest: ((ByteArray?) -> Unit)? = null
+    @Volatile private var snapshotMaxSize = 1280
+    @Volatile private var snapshotQuality = 80
 
-    /** Captures the next frame (with the stamp, upright) as a JPEG up to 1280 px wide. Callback runs on a background thread. */
-    fun requestSnapshot(callback: (ByteArray?) -> Unit) {
+    /** Captures the next frame (with the stamp, upright) as a JPEG. Callback runs on a background thread. */
+    fun requestSnapshot(maxSize: Int = 1280, quality: Int = 80, callback: (ByteArray?) -> Unit) {
+        snapshotMaxSize = maxSize
+        snapshotQuality = quality
         snapshotRequest = callback
     }
     private val fullQuad = makeFullQuad() // per renderer: each camera draws on its own thread
@@ -213,7 +217,9 @@ class OverlayRenderer(
                 snapshotRequest = null
                 val buf = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
                 GLES20.glReadPixels(0, 0, width, height, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
-                Thread { cb(encodeSnapshot(buf)) }.start()
+                val size = snapshotMaxSize
+                val quality = snapshotQuality
+                Thread { cb(encodeSnapshot(buf, size, quality)) }.start()
             }
             EGLExt.eglPresentationTimeANDROID(display, eglSurface, pts)
             EGL14.eglSwapBuffers(display, eglSurface)
@@ -310,7 +316,7 @@ class OverlayRenderer(
     }
 
     /** GL rows are bottom-up; flip, turn upright (as players would), shrink and compress. */
-    private fun encodeSnapshot(buf: ByteBuffer): ByteArray? = try {
+    private fun encodeSnapshot(buf: ByteBuffer, maxSize: Int, quality: Int): ByteArray? = try {
         buf.rewind()
         val raw = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         raw.copyPixelsFromBuffer(buf)
@@ -319,10 +325,10 @@ class OverlayRenderer(
             postRotate(rotation.toFloat())
         }, true)
         raw.recycle()
-        val scale = minOf(1f, 1280f / maxOf(upright.width, upright.height))
+        val scale = minOf(1f, maxSize.toFloat() / maxOf(upright.width, upright.height))
         val small = if (scale < 1f) Bitmap.createScaledBitmap(upright, (upright.width * scale).toInt(), (upright.height * scale).toInt(), true) else upright
         val out = java.io.ByteArrayOutputStream()
-        small.compress(Bitmap.CompressFormat.JPEG, 80, out)
+        small.compress(Bitmap.CompressFormat.JPEG, quality, out)
         if (small !== upright) small.recycle()
         upright.recycle()
         out.toByteArray()

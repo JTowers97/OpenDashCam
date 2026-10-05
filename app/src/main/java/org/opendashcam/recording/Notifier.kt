@@ -17,6 +17,7 @@ object Notifier {
     const val CHANNEL_STANDBY = "standby"
     const val CHANNEL_TRACKING = "tracking"
     const val TRACKING_ID = 4
+    const val LIVE_ID = 5
     const val STANDBY_ID = 2
     const val AUTOSTART_PROMPT_ID = 3
     const val RECORDING_ID = 1
@@ -77,6 +78,21 @@ object Notifier {
             .setContentIntent(open)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
+    }
+
+    /** Shown while someone watches the cameras live from the ODC Server. */
+    fun liveView(context: Context, active: Boolean) {
+        val nm = context.getSystemService(NotificationManager::class.java)
+        if (!active) { nm.cancel(LIVE_ID); return }
+        val n = NotificationCompat.Builder(context, CHANNEL_TRACKING)
+            .setSmallIcon(R.drawable.ic_stat_odc)
+            .setContentTitle("Being viewed live")
+            .setContentText("Someone is watching the cameras from your ODC Server.")
+            .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+        try { nm.notify(LIVE_ID, n) } catch (_: SecurityException) {}
     }
 
     fun updateTracking(context: Context, text: String) {

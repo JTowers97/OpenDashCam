@@ -83,6 +83,26 @@ class ServerClient(baseUrl: String, private val token: String?, private val pin:
         return id
     }
 
+    /** Live view: waits up to ~25 s for a request. Returns the offer, or null if nobody asked. */
+    fun liveViewWait(): JSONObject? {
+        val c = open("GET", "/api/v1/live-view/wait")
+        c.readTimeout = 40_000
+        if (c.responseCode == 204) { c.disconnect(); return null }
+        return JSONObject(readResponse(c))
+    }
+
+    /** Sends one live view frame. Returns the server's answer ({continue, fps, maxWidth}). */
+    fun liveViewFrame(session: String, stream: String, label: String, jpeg: ByteArray): JSONObject {
+        val q = "stream=" + java.net.URLEncoder.encode(stream, "UTF-8") + "&label=" + java.net.URLEncoder.encode(label, "UTF-8")
+        val c = open("POST", "/api/v1/live-view/$session/frame?$q")
+        c.readTimeout = 15_000
+        c.setRequestProperty("Content-Type", "image/jpeg")
+        c.doOutput = true
+        c.setFixedLengthStreamingMode(jpeg.size)
+        c.outputStream.use { it.write(jpeg) }
+        return JSONObject(readResponse(c))
+    }
+
     /** An event with a photo (impact snapshot). */
     fun eventWithPhoto(type: String, message: String, jpeg: ByteArray) {
         val q = "type=" + java.net.URLEncoder.encode(type, "UTF-8") + "&message=" + java.net.URLEncoder.encode(message, "UTF-8") +

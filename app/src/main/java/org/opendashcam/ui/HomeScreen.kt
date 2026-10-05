@@ -212,6 +212,14 @@ fun HomeScreen(
                     TextButton(onClick = onOpenParking) { Text("Where I parked") }
                 }
 
+                val watched by org.opendashcam.liveview.LiveViewClient.watching.collectAsStateWithLifecycle()
+                if (watched) {
+                    Text(
+                        "● Being viewed live from your ODC Server",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 val tracking by TrackingService.state.collectAsStateWithLifecycle()
                 if (tracking.active && !active) {
                     Text(

@@ -151,6 +151,14 @@ fun ServerSection(settings: OdcSettings, onChanged: () -> Unit, onOpenServerClip
             subtitle = if (settings.gpsEnabled) "Every 5 seconds while recording. Never inside privacy zones."
             else "Needs GPS logging (Settings → Location).",
         )
+        SwitchRow(
+            title = "Allow live view",
+            checked = settings.liveViewAllowed,
+            onChange = { on -> settings.liveViewAllowed = on; onChanged() },
+            subtitle = "Lets people with owner or manager access to this car watch its cameras from the ODC Server while ODC is recording " +
+                "(1–2 pictures a second, roughly 3–8 MB of data a minute). A notification shows while someone is watching. " +
+                "Takes effect the next time recording starts.",
+        )
         TrackingControls(settings, onChanged)
         Hint("What gets uploaded and when is set under Backup rules below.")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -6,18 +6,18 @@ plugins {
 
 android {
     namespace = "org.opendashcam"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "org.opendashcam"
         minSdk = 29
-        targetSdk = 35
+        targetSdk = 36
         // CI stamps every build: versionCode always increases (so updates install over older builds),
         // and the build number and commit appear in the app, e.g. "0.4.0 (build 42 · a1b2c3d)".
         val ciBuild = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
         val commit = System.getenv("GITHUB_SHA")?.take(7) ?: "local"
         versionCode = 1000 + (ciBuild ?: 0)
-        versionName = "1.4.0"
+        versionName = "1.6.0"
         buildConfigField("String", "BUILD_LABEL", "\"${ciBuild?.let { "build $it" } ?: "local build"} · $commit\"")
     }
 
@@ -82,7 +82,7 @@ android {
 
 base {
     // APK file name includes the version: OpenDashCam-0.4.0-debug.apk
-    archivesName.set("OpenDashCam-1.4.0")
+    archivesName.set("OpenDashCam-1.6.0")
 }
 
 dependencies {
@@ -99,19 +99,22 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     // Maps (privacy zone editor, clip map): MapLibre with OpenStreetMap data, no API key, BSD-2
-    implementation("org.maplibre.gl:android-sdk:11.5.2")
+    implementation("org.maplibre.gl:android-sdk:11.11.0")
 
     // QR scanning for server pairing (ZXing, Apache 2.0, no Google Play Services)
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     // Background uploads
     implementation("androidx.work:work-runtime-ktx:2.10.0")
+
+    // Optional app lock (fingerprint, face or screen lock)
+    implementation("androidx.biometric:biometric:1.1.0")
     // SMB 2/3 client (Apache 2.0)
     implementation("com.hierynomus:smbj:0.14.0")
 
     // CameraX is used only for the framing preview while idle.
     // Recording uses Camera2 + MediaRecorder directly.
-    val cameraX = "1.4.1"
+    val cameraX = "1.4.2"
     implementation("androidx.camera:camera-camera2:$cameraX")
     implementation("androidx.camera:camera-lifecycle:$cameraX")
     implementation("androidx.camera:camera-view:$cameraX")

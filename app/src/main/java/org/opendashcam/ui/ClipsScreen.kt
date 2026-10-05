@@ -215,8 +215,9 @@ fun ClipsScreen(
     val byDay = shown.groupBy { dayStart(it.startTime) }
 
     Column(modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.weight(1f)) { ScreenHeader("Clips", onBack) }
+        // Title on its own line; the actions wrap below it on narrow screens.
+        ScreenHeader("Clips", onBack)
+        FlowRow(verticalArrangement = Arrangement.Center, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             TextButton(onClick = { selecting = !selecting; selected.clear() }) { Text(if (selecting) "Done" else "Select") }
             if (settings.serverPaired && !selecting) {
                 TextButton(onClick = onOpenMap) { Text("Map") }

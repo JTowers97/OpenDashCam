@@ -67,6 +67,16 @@ class OdcSettings(context: Context) {
     var segmentMinutes by int("segment_minutes", 3)
     var displayMode by enumPref("display_mode", DisplayMode.DIM, DisplayMode.entries)
     var audioEnabled by bool("audio_enabled", false)
+    // Appearance and accessibility
+    var themeMode by string("theme_mode", "dark")          // dark | light | system
+    var accent by string("accent", "orange")               // orange | blue | green | purple | teal | red | dynamic
+    var textScale by string("text_scale", "1.0")           // 1.0 | 1.15 | 1.3
+    var highContrast by bool("high_contrast", false)
+
+    // App lock: fingerprint, face or screen lock to open clips, maps and settings
+    var appLock by bool("app_lock", false)
+    var appLockTimeoutMin by int("app_lock_timeout", 1)    // relock after this long in the background (0 = immediately)
+
     var overlayEnabled by bool("overlay_enabled", false)     // burned-in date/time stamp
     /** Where the car was parked: "lat,lon,epochMs" or "" (saved when parking mode starts or recording stops). */
     var parkedAt by string("parked_at", "")
@@ -119,6 +129,8 @@ class OdcSettings(context: Context) {
     var serverCameraLabel by string("server_camera_label", "")
     var serverUploadEnabled by bool("server_upload", true)
     var serverLiveEnabled by bool("server_live", true)
+    /** Let the ODC Server ask for a live view of the cameras while recording (off by default). */
+    var liveViewAllowed by bool("live_view_allowed", false)
     /** Optional server address on the home network, used automatically when reachable. */
     var serverHomeUrl by string("server_home_url", "")
     /** SHA-256 fingerprint (base64url) of the server's own certificate, trusted for its HTTPS addresses. */
