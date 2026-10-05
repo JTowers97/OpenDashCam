@@ -15,7 +15,7 @@ import { notify } from './notify.js';
 
 const API_VERSIONS = [1];
 
-function requireCamera(ctx) {
+export function requireCamera(ctx) {
   const cam = cameraFromRequest(ctx.db, ctx.req);
   if (!cam) throw new HttpError(401, 'Unknown or revoked device. Pair this phone again.');
   ctx.db.run('UPDATE cameras SET last_seen_at = ?, offline_alerted = 0 WHERE id = ?', now(), cam.id);

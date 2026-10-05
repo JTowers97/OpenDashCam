@@ -1,5 +1,13 @@
 // Open Dash Cam web app. No build step: plain ES modules. MapLibre and the QR library load on demand.
 // Missing pieces (null/undefined/false) are skipped when adding to the page, so optional parts never show as "null".
+// "Skip to content": move focus to the page content without changing the address (pages live after the #).
+document.addEventListener('click', (e) => {
+  const skip = e.target.closest?.('a.skip');
+  if (!skip) return;
+  e.preventDefault();
+  document.getElementById('main')?.focus();
+});
+
 for (const m of ['append', 'prepend', 'replaceChildren']) {
   const orig = Element.prototype[m];
   Element.prototype[m] = function (...items) {
@@ -126,7 +134,9 @@ function parseHash() {
 async function boot() {
   try {
     state.setup = (await api('GET', '/api/setup')).data;
-    if (!state.setup.needsSetup) state.me = (await api('GET', '/api/me')).data;
+    if (!state.setup.needsSetup) {
+      state.me = (await api('GET', '/api/me')).data; window.applyPrefs?.(state.me.prefs);
+    }
   } catch { /* not signed in */ }
   render();
 }
@@ -142,9 +152,9 @@ function render() {
   if (!state.me) return root.append(loginPage());
   const { page, id, params } = parseHash();
   const nav = (key, label) => h('a', { href: `#/${key}`, class: page === key || (key === 'trips' && page === 'trip') || (key === 'timeline' && page === 'sync') || (key === 'plates' && page === 'plate') ? 'active' : '' }, label);
-  const main = h('main');
+  const main = h('main', { id: 'main', tabindex: '-1' });
   root.append(h('div', { class: 'shell' },
-    h('nav', { class: 'nav' },
+    h('nav', { class: 'nav', 'aria-label': 'Main' },
       h('div', { class: 'brand' }, h('img', { src: '/icon.svg', alt: '' }), 'Open Dash Cam'),
       nav('timeline', 'Timeline'), nav('search', 'Search'), state.me.settings.plateLog ? nav('plates', 'Plates') : null, nav('map', 'Map'), nav('trips', 'Trips'), nav('cars', 'Cars'),
       nav('events', 'Events'), nav('settings', 'Settings'),
@@ -156,12 +166,29 @@ function render() {
 }
 
 function modal(content, narrow = false) {
-  const close = () => { backdrop.remove(); content.dispatchEvent(new Event('close')); };
-  const backdrop = h('div', { class: 'backdrop', onclick: (e) => { if (e.target === backdrop) close(); } },
-    h('div', { class: `modal${narrow ? ' narrow' : ''}` }, content));
-  const onKey = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); } };
+  const opener = document.activeElement;
+  const box = h('div', { class: `modal${narrow ? ' narrow' : ''}`, role: 'dialog', 'aria-modal': 'true', tabindex: '-1' }, content);
+  const heading = content.querySelector?.('h1, h2, h3');
+  if (heading) { heading.id ||= `dlg-${Math.random().toString(36).slice(2, 8)}`; box.setAttribute('aria-labelledby', heading.id); }
+  const close = () => {
+    backdrop.remove();
+    document.removeEventListener('keydown', onKey);
+    content.dispatchEvent(new Event('close'));
+    if (opener && document.contains(opener)) opener.focus(); // back to where you were
+  };
+  const backdrop = h('div', { class: 'backdrop', onclick: (e) => { if (e.target === backdrop) close(); } }, box);
+  const onKey = (e) => {
+    if (e.key === 'Escape') close();
+    if (e.key === 'Tab') { // keep keyboard focus inside the dialog
+      const f = [...box.querySelectorAll('a[href], button:not([disabled]), input, select, textarea, video, [tabindex]:not([tabindex="-1"])')].filter((x) => x.offsetParent !== null);
+      if (!f.length) return;
+      if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+      else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
+    }
+  };
   document.addEventListener('keydown', onKey);
   $('#modal-root').append(backdrop);
+  box.focus();
   return close;
 }
 
@@ -193,7 +220,7 @@ function setupWizard() {
         try {
           await api('POST', '/api/setup', { username: user.value, password: pw.value });
           state.setup.needsSetup = false;
-          state.me = (await api('GET', '/api/me')).data;
+          state.me = (await api('GET', '/api/me')).data; window.applyPrefs?.(state.me.prefs);
           w.step = 2;
           render();
         } catch (e) { err.textContent = e.message; }
@@ -241,7 +268,7 @@ function loginPage() {
     e.preventDefault();
     try {
       await api('POST', '/api/login', { username: user.value, password: pw.value, code: code.value || undefined });
-      state.me = (await api('GET', '/api/me')).data;
+      state.me = (await api('GET', '/api/me')).data; window.applyPrefs?.(state.me.prefs);
       render();
     } catch (ex) {
       if (ex.data?.totpRequired) {
@@ -491,7 +518,12 @@ function clipTile(c, onChange, offsetMs) {
     !c.hasThumb ? (c.encrypted ? 'Encrypted' : 'Processing…') : null,
     h('div', { class: 'tags' }, tags),
     c.durationMs ? h('div', { class: 'dur' }, fmtDur(c.durationMs)) : null);
-  return h('div', { class: 'tile', onclick: () => openClip(c.id, onChange, offsetMs) }, thumb,
+  const label = `Clip from ${fmtDateTime(c.startedAt)}, ${c.carName} ${c.camera}${c.locked ? ', locked' : ''}${c.lockReason === 'impact' ? ', impact' : ''}`;
+  return h('div', {
+    class: 'tile', role: 'button', tabindex: '0', 'aria-label': label,
+    onclick: () => openClip(c.id, onChange, offsetMs),
+    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.currentTarget.click(); } },
+  }, thumb,
     h('div', { class: 'meta' },
       h('div', {}, h('strong', {}, fmtTime(c.startedAt)), ` · ${c.carName} · ${c.camera}`),
       h('div', { class: 'muted' }, [c.place, fmtBytes(c.size), c.codec?.toUpperCase()].filter(Boolean).join(' · '))));
@@ -589,10 +621,29 @@ async function openClip(id, onChange, offsetMs) {
   const trimBtn = c.encrypted ? null : h('button', { class: 'btn', onclick: () => { trimPanel.style.display = trimPanel.style.display === 'none' ? '' : 'none'; } }, 'Trim');
   const sharePanel = c.encrypted ? null : shareForm(c, trim, video);
   const shareBtn = c.encrypted ? null : h('button', { class: 'btn', onclick: () => { sharePanel.style.display = sharePanel.style.display === 'none' ? '' : 'none'; } }, 'Share');
+  const platesPanel = h('div', { class: 'card stack', style: 'display:none;background:var(--panel2)' });
+  const platesBtn = state.me.settings.plateSearch && !c.encrypted ? h('button', { class: 'btn', onclick: async () => {
+    if (platesPanel.style.display !== 'none') { platesPanel.style.display = 'none'; return; }
+    platesPanel.style.display = '';
+    platesPanel.replaceChildren(h('span', { class: 'muted small' }, 'Loading…'));
+    try {
+      const { data } = await api('GET', `/api/clips/${id}/plates`);
+      if (!data.reads.length) {
+        platesPanel.replaceChildren(h('span', { class: 'muted small' }, data.analyzed ? 'No license plates were read in this clip.' : 'This clip hasn’t been checked for plates yet. It will be soon (Settings → Analyze footage to prioritize it).'));
+        return;
+      }
+      platesPanel.replaceChildren(h('h3', { style: 'margin:0' }, `Plates in this clip (${data.reads.length})`),
+        h('div', { class: 'plate-list' }, data.reads.map((r) => h('div', { class: 'plate-item', title: 'Jump to this moment', onclick: () => { video.currentTime = r.offsetMs / 1000; video.play().catch(() => {}); } },
+          h('img', { src: r.cropUrl, alt: r.plate, loading: 'lazy' }),
+          h('div', {}, h('strong', { style: 'font-family:ui-monospace,monospace' }, r.plate),
+            h('div', { class: 'muted small' }, `at ${fmtSecs(r.offsetMs / 1000)} · ${Math.round(r.confidence * 100)}% sure${r.corrected ? ' · corrected' : ''}`),
+            data.plateLog ? h('a', { href: `#/plate/${r.plate}`, class: 'small', onclick: (e) => { e.stopPropagation(); close(); } }, 'All sightings') : null)))));
+    } catch (e) { platesPanel.replaceChildren(h('span', { class: 'error small' }, e.message)); }
+  } }, 'Plates') : null;
   const reportBtn = h('button', { class: 'btn', onclick: () => reportDialog(c.carId, c.startedAt + Math.round((c.encrypted ? 0 : video.currentTime) * 1000)) }, 'Incident report');
 
-  body.append(c.encrypted ? null : video, note, trimPanel, sharePanel,
-    h('div', { class: 'row' }, h('h2', { class: 'grow', style: 'margin:0' }, `${c.carName} · ${c.camera}`), syncLink, trimBtn, shareBtn, reportBtn, lockBtn, dl, mapLink, del),
+  body.append(c.encrypted ? null : video, note, trimPanel, sharePanel, platesPanel,
+    h('div', { class: 'row' }, h('h2', { class: 'grow', style: 'margin:0' }, `${c.carName} · ${c.camera}`), syncLink, trimBtn, shareBtn, platesBtn, reportBtn, lockBtn, dl, mapLink, del),
     h('table', {},
       [['Recorded', fmtDateTime(c.startedAt)], ['Place', c.place || (c.lat != null ? `${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}` : '')], ['Length', fmtDur(c.durationMs)], ['Size', fmtBytes(c.size)],
         ['Video', [c.width && `${c.width}×${c.height}`, c.fps && `${c.fps} fps`, c.codec?.toUpperCase()].filter(Boolean).join(' · ')],
@@ -797,6 +848,7 @@ async function pageMap(main, _id, params) {
 
   async function refresh() {
     const { data } = await api('GET', '/api/live');
+    const ready = (await api('GET', '/api/live-view-ready').catch(() => ({ data: {} }))).data;
     list.replaceChildren();
     const bounds = new maplibregl.LngLatBounds();
     for (const car of data) {
@@ -807,7 +859,9 @@ async function pageMap(main, _id, params) {
           p?.live ? h('span', { class: 'badge ok' }, 'Live') : h('span', { class: 'badge' }, 'Last seen'),
           recording ? h('span', { class: 'badge red' }, 'REC') : null),
         p ? h('div', { class: 'small' }, p.live ? `${fmtSpeed(p.speed)} · updated ${ago(p.t)}` : `Last seen ${ago(p.t)}`) : h('div', { class: 'muted small' }, 'No location yet'),
-        p?.mismatch ? h('div', { class: 'small', style: 'color:var(--warn)' }, `⚠ Cameras disagree by ${fmtShortDist(p.mismatch.distance)}`) : null));
+        p?.mismatch ? h('div', { class: 'small', style: 'color:var(--warn)' }, `⚠ Cameras disagree by ${fmtShortDist(p.mismatch.distance)}`) : null,
+        ready[car.id] && state.cars.find((c) => c.id === car.id)?.role !== 'viewer'
+          ? h('button', { class: 'btn small', style: 'margin-top:.4rem', onclick: () => liveViewDialog(car.id, car.name) }, '● Live view') : null));
       if (!p) continue;
       // MapLibre positions the marker's outer element with its own classes, so only the inner label is restyled.
       let m = markers.get(car.id);
@@ -1325,6 +1379,13 @@ function carCard(car) {
     card.append(h('h3', {}, 'When cameras disagree on location or speed'), h('div', { class: 'row' }, pol, truth));
   }
 
+  // Live view
+  if (manage) {
+    card.append(h('div', { class: 'row', style: 'margin-top:.5rem' },
+      h('button', { class: 'btn small', onclick: () => liveViewDialog(car.id, car.name) }, '● Live view'),
+      h('span', { class: 'muted small' }, 'See what the car’s cameras see right now (while ODC is recording, with live view allowed in the app).')));
+  }
+
   // Viofo dashcam import
   if (manage) {
     const addr = h('input', { type: 'text', value: (car.viofoUrl || '').replace(/^http:\/\//, ''), placeholder: 'e.g. 192.168.1.60', style: 'width:200px' });
@@ -1694,12 +1755,39 @@ async function serverSettingsForm(onSaved) {
     patch.mismatchSpeedKmh = Math.round(metric.speed * 10) / 10;
     try {
       Object.assign(s, (await api('PUT', '/api/settings', patch)).data);
-      state.me = (await api('GET', '/api/me')).data;
+      state.me = (await api('GET', '/api/me')).data; window.applyPrefs?.(state.me.prefs);
       refreshSmart();
       if (done) { toast('Settings saved.'); onSaved?.(); }
     } catch (e) { err.textContent = e.message; }
   }
   return form;
+}
+
+function displayCard() {
+  const p = { theme: 'dark', accent: 'orange', textSize: 100, highContrast: false, reduceMotion: false, ...(state.me.prefs || {}) };
+  const save = async () => {
+    window.applyPrefs?.(p);
+    try { state.me.prefs = (await api('PUT', '/api/me/prefs', p)).data; } catch (e) { toast(e.message); }
+  };
+  const select = (key, options) => {
+    const sel = h('select', { onchange: () => { p[key] = key === 'textSize' ? Number(sel.value) : sel.value; save(); } },
+      options.map(([v, l]) => h('option', { value: v, selected: String(p[key]) === String(v) }, l)));
+    return sel;
+  };
+  const check = (key, label) => h('label', { class: 'row' }, h('input', { type: 'checkbox', checked: !!p[key], onchange: (e) => { p[key] = e.target.checked; save(); } }), label);
+  const swatches = h('div', { class: 'row', role: 'radiogroup', 'aria-label': 'Accent color' },
+    [['orange', '#ff5a36'], ['blue', '#3d8bff'], ['green', '#2fb36b'], ['purple', '#9b6bff'], ['teal', '#14b8a6'], ['red', '#e5484d']].map(([name, color]) => {
+      const b = h('button', { class: `swatch${p.accent === name ? ' on' : ''}`, role: 'radio', 'aria-checked': String(p.accent === name), 'aria-label': name, title: name, style: `background:${color}`,
+        onclick: () => { p.accent = name; swatches.querySelectorAll('.swatch').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-checked', String(x === b)); }); save(); } });
+      return b;
+    }));
+  return h('div', { class: 'card stack', style: 'max-width:640px;margin-top:1rem' }, h('h2', {}, 'Display'),
+    h('p', { class: 'muted small', style: 'margin:0' }, 'Just for you, in every browser you sign in to.'),
+    h('div', { class: 'row' }, h('span', { class: 'grow' }, 'Theme'), select('theme', [['dark', 'Dark'], ['light', 'Light'], ['system', 'Same as this device']])),
+    h('div', { class: 'row' }, h('span', { class: 'grow' }, 'Accent color'), swatches),
+    h('div', { class: 'row' }, h('span', { class: 'grow' }, 'Text size'), select('textSize', [[100, 'Default'], [115, 'Large'], [130, 'Larger']])),
+    check('highContrast', 'High contrast'),
+    check('reduceMotion', 'Reduce motion (no animations)'));
 }
 
 async function devicesCard() {
@@ -1749,6 +1837,72 @@ function auditCard() {
     table, more_);
   load(false).catch((e) => table.append(h('p', { class: 'error' }, e.message)));
   return card;
+}
+
+/** Live view of a car: one picture per camera, refreshed 1–2 times a second, for a limited time. */
+async function liveViewDialog(carId, carName) {
+  const grid = h('div', { class: 'live-grid' });
+  const status = h('span', { class: 'small' }, 'Waking the phone…');
+  const fpsSel = h('select', {}, [[1, '1 picture/second'], [2, '2 pictures/second (more data)']].map(([v, l]) => h('option', { value: v }, l)));
+  const extendBtn = h('button', { class: 'btn small' }, 'Keep watching');
+  const stopBtn = h('button', { class: 'btn small danger' }, 'Stop');
+  const body = h('div', { class: 'stack' },
+    h('div', { class: 'row' }, h('h2', { class: 'grow', style: 'margin:0' }, `${carName} · live`), fpsSel, extendBtn, stopBtn),
+    status, grid,
+    h('p', { class: 'muted small', style: 'margin:0' }, 'Live view works while ODC is recording on a phone in this car with “Allow live view” on. The phone shows a notification while you watch. It uses mobile data on the phone (roughly 3–8 MB a minute).'));
+  let session = null;
+  let expiresAt = 0;
+  let timer = null;
+  const imgs = new Map();
+  const close = modal(body);
+  body.addEventListener('close', () => {
+    clearInterval(timer);
+    imgs.forEach((img) => { img.src = ''; });
+    if (session) api('DELETE', `/api/live-view/${session}`).catch(() => {});
+  });
+  async function start() {
+    try {
+      const { data } = await api('POST', `/api/cars/${carId}/live-view`, { fps: Number(fpsSel.value) });
+      session = data.session;
+      expiresAt = data.expiresAt;
+    } catch (e) {
+      status.textContent = e.message;
+      extendBtn.disabled = fpsSel.disabled = true;
+      return;
+    }
+    clearInterval(timer);
+    timer = setInterval(poll, 1500);
+    poll();
+  }
+  async function poll() {
+    try {
+      const { data } = await api('GET', `/api/live-view/${session}`);
+      expiresAt = data.expiresAt;
+      for (const st of data.streams) {
+        if (imgs.has(st.key)) continue;
+        const img = h('img', { src: `/api/live-view/${session}/stream?key=${encodeURIComponent(st.key)}`, alt: st.label });
+        imgs.set(st.key, img);
+        grid.append(h('figure', {}, img, h('figcaption', { class: 'small' }, st.label)));
+      }
+      const left = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
+      const fresh = data.streams.some((st) => Date.now() - st.lastFrameAt < 6000);
+      status.textContent = !data.streams.length ? 'Waiting for the first picture…'
+        : `${fresh ? '● Live' : 'Connection is slow…'} · ends in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} · ${fmtBytes(data.bytes)} so far`;
+    } catch {
+      clearInterval(timer);
+      status.textContent = 'Live view ended.';
+      imgs.forEach((img) => { img.style.opacity = 0.4; });
+    }
+  }
+  extendBtn.onclick = async () => {
+    if (!session) return;
+    const { data } = await api('POST', `/api/live-view/${session}/extend`);
+    expiresAt = data.expiresAt;
+    if (data.maxReached) toast('That’s the 15-minute maximum for one live view.');
+  };
+  fpsSel.onchange = () => start();
+  stopBtn.onclick = () => close();
+  start();
 }
 
 /** Polls a background job until it finishes; calls onUpdate with each status. */
@@ -1994,6 +2148,7 @@ async function pageSettings(main) {
         try { await api('PUT', '/api/me/password', { current: cur.value, password: pw.value }); toast('Password changed.'); cur.value = pw.value = ''; } catch (e) { toast(e.message); }
       } }, 'Change password')));
 
+  main.append(displayCard());
   main.append(await twoFactorCard());
   main.append(await devicesCard());
   main.append(await sharedLinksCard());

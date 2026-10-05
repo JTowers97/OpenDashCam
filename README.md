@@ -58,6 +58,9 @@ Free and open source. No accounts, no cloud, no ads, no tracking.
 - Connects securely over HTTPS: with a free Let's Encrypt certificate (set up automatically by the server's
   optional HTTPS container), or with the server's built-in HTTPS, which needs no domain: the pairing QR
   code tells the phone exactly which server certificate to trust
+- Optional **app lock** (fingerprint, face or screen lock) for clips, maps and settings; recording never needs unlocking
+- **Themes** (dark, light, follow the phone; accent colors) and **accessibility** options (larger text, high
+  contrast; full screen reader labels)
 - Warns when a connection isn't encrypted (an `http://` server address, or an SMB share without encryption)
 - Choose to keep or delete the phone copy after upload; locked clips and clips you mark "Keep on
   phone" always stay
@@ -78,6 +81,8 @@ Free and open source. No accounts, no cloud, no ads, no tracking.
 - A **getting-started checklist** for new installs
 - **Arrival alerts** at places you mark on the map, **speed alerts**, and **impact alerts with a photo**
 - Optional **driving events**: hard braking, hard acceleration and sharp turns, on trips and in Events
+- **Live view on demand:** see what a car's cameras see right now, from the ODC Server (while recording,
+  if allowed on the phone)
 - **Home Assistant integration** (MQTT): each car's location, speed, recording status and alerts
 - **Viofo dashcam import:** recordings (with GPS) from Viofo cameras on your Wi-Fi, alongside phone footage
 - **Expiring share links** and **incident reports** (all cameras, route map, speed graph, notes), with
@@ -142,6 +147,10 @@ and encode it with `base64 -w0 release.jks` (Linux/macOS) or
 (PowerShell, from the folder containing `release.jks`; copies the result to the clipboard). Keep the file and
 passwords safe and private: without them you can never publish an update to installed copies.
 
+With a release key, the workflow also builds the Android App Bundle (`.aab`) that Google Play takes for uploads (in
+the run's artifacts), and every build checks that the native libraries support 16 KB memory pages, as Google Play
+requires.
+
 **Switching keys:** Android only installs an update signed with the same key as the installed app. Moving
 from debug-signed to release-signed builds means uninstalling once, which deletes footage stored on the
 phone, so back it up first.
@@ -169,13 +178,16 @@ tracking-only mode (with a notification showing while it runs).
 
 ## Roadmap
 
-Planned features, in no particular order:
+**Next (1.7), all optional:**
+- **Spoken feedback:** short announcements such as "Recording started" or "Parking mode", so you know ODC is
+  working without looking at the phone
+- **Weekly summary:** a weekly notification with trips, distance, events and storage
+- **Impact clips over mobile data:** upload locked and impact clips right away, even when other backups wait for Wi-Fi
 
-- **Live view on demand:** look through a car's camera from the ODC Server (for example after an impact
-  alert while parked)
-- **App lock (optional):** require your fingerprint, face or screen lock to open clips and settings
-- **Custom themes (optional):** choose colors and light/dark appearance in the app and the web app
-- **Accessibility settings (optional):** larger text and controls, higher contrast, and screen reader support
+**Planned: dedicated dashcams, starting with Viofo.** Set the camera up once with the manufacturer's app, then use
+ODC instead: live view, browsing and downloading recordings with their GPS data, and offloading them to the ODC
+Server or an SMB share, through the camera's own Wi-Fi from the ODC app, and directly from the ODC Server when the
+car is home.
 
 Suggestions and bug reports are welcome in [Issues](../../issues).
 
@@ -194,6 +206,8 @@ OpenStreetMap contributors (maps); GeoNames (place names, CC BY 4.0); OpenAI CLI
 sentence-transformers (smart search); fast-alpr (license plates).
 
 ## License
+
+See [PRIVACY.md](PRIVACY.md) for the privacy policy: the project collects no data; everything stays on your phone or your own server.
 
 The Android app and tools are licensed under the [GNU GPL v3](LICENSE). The server is licensed under the
 GNU AGPL v3 (see `server/`).

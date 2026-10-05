@@ -1,5 +1,29 @@
 # Changelog
 
+## App 1.6.0 · Server 1.6.0
+- **App:** optional app lock (fingerprint, face or screen lock) for clips, maps, the parking spot and settings,
+  relocking after a chosen time; the recording screen is never locked
+- **App:** themes (dark, light or follow the phone; six accent colors, or colors from the wallpaper on Android 12+),
+  text size and high contrast; the recording screen stays dark for night driving
+- **App:** settings switches are now announced with their names by screen readers, and the whole row is tappable
+- **Server:** per-person display preferences (theme, accent, text size, high contrast, reduced motion) that follow
+  you to any browser
+- **Server:** accessibility: proper dialog semantics with focus kept inside and returned afterwards, keyboard-openable
+  clips with descriptive labels, a "Skip to content" link, always-visible keyboard focus
+- **Google Play:** targets Android 16 (API 36), as Google Play now requires; updated MapLibre, CameraX and the
+  Android build tools; builds now include the Android App Bundle (.aab) Google Play needs, and check that all native
+  libraries support 16 KB memory pages
+- **Project:** added a privacy policy (PRIVACY.md)
+
+## App 1.5.0 · Server 1.5.0
+- **Server + App:** live view on demand: watch a car's cameras from the ODC Server while ODC is recording
+  (1–2 pictures a second per camera, works over mobile data). Off by default on the phone (Settings → ODC Server →
+  Allow live view); the phone shows a notification while watched; owners are notified when someone else watches;
+  owners and managers only; sessions end after 2 minutes unless extended, or when nobody is watching
+- **Server:** the clip player lists the license plates read in that clip, with crops and their moment (click to jump)
+- **Fixed (app):** on narrower screens the Clips title was squeezed into one letter per line by the buttons next to it;
+  the buttons now wrap below the title
+
 ## Server 1.4.0 (app 1.4.0: no changes, version aligned)
 - **Server:** Home Assistant integration over MQTT with discovery: each car's location tracker, speed,
   last seen, phone battery, recording and moving, plus an alert event entity

@@ -1,6 +1,6 @@
 {
   "name": "opendashcam-server",
-  "version": "1.4.0",
+  "version": "1.6.0",
   "description": "Self-hosted server for Open Dash Cam: footage timeline, live map, trips and backups.",
   "license": "AGPL-3.0-or-later",
   "type": "module",
@@ -10,6 +10,6 @@
   },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/main.js",
-    "test": "node --disable-warning=ExperimentalWarning test/api.test.js && node --disable-warning=ExperimentalWarning test/phase4b.test.js && node --disable-warning=ExperimentalWarning test/phase5.test.js && node --disable-warning=ExperimentalWarning test/v080.test.js && node --disable-warning=ExperimentalWarning test/v090.test.js && node --disable-warning=ExperimentalWarning test/v100.test.js && node --disable-warning=ExperimentalWarning test/v110.test.js && node --disable-warning=ExperimentalWarning test/v120.test.js && node --disable-warning=ExperimentalWarning test/v130.test.js && node --disable-warning=ExperimentalWarning test/v140.test.js"
+    "test": "node --disable-warning=ExperimentalWarning test/api.test.js && node --disable-warning=ExperimentalWarning test/phase4b.test.js && node --disable-warning=ExperimentalWarning test/phase5.test.js && node --disable-warning=ExperimentalWarning test/v080.test.js && node --disable-warning=ExperimentalWarning test/v090.test.js && node --disable-warning=ExperimentalWarning test/v100.test.js && node --disable-warning=ExperimentalWarning test/v110.test.js && node --disable-warning=ExperimentalWarning test/v120.test.js && node --disable-warning=ExperimentalWarning test/v130.test.js && node --disable-warning=ExperimentalWarning test/v140.test.js && node --disable-warning=ExperimentalWarning test/v150.test.js && node --disable-warning=ExperimentalWarning test/v160.test.js"
   }
 }

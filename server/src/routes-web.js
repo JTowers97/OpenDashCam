@@ -24,6 +24,8 @@ import { registerReportRoutes } from './reports.js';
 import { snapshotPath } from './snapshots.js';
 import { haStatus } from './homeassistant.js';
 import { importCar, listFiles } from './viofo.js';
+import { registerLiveViewRoutes } from './liveview.js';
+import { requireCamera } from './routes-device.js';
 import { indexerState, indexStats, mlHealth, resetIndex, runIndexer, visualSearch } from './search.js';
 import {
   erasePlates, mergePlates, normalizePlate, plateCrop, plateLog, plateStats, purgeOldPlates, runPlateIndexer, searchPlates, similarPlates,
@@ -101,8 +103,24 @@ export function registerWebRoutes(router, app) {
 
   router.add('GET', '/api/me', (ctx) => {
     const u = requireUser(ctx);
-    const row = db.get('SELECT totp_enabled FROM users WHERE id = ?', u.id);
-    send(ctx.res, 200, { ...u, totpEnabled: !!row.totp_enabled, settings: publicSettings(getSettings(db)), version: config.version });
+    const row = db.get('SELECT totp_enabled, prefs FROM users WHERE id = ?', u.id);
+    send(ctx.res, 200, { ...u, totpEnabled: !!row.totp_enabled, prefs: safeJson(row.prefs) || {}, settings: publicSettings(getSettings(db)), version: config.version });
+  });
+
+  /** Display preferences, per person (follow them to any browser). */
+  router.add('PUT', '/api/me/prefs', async (ctx) => {
+    const u = requireUser(ctx);
+    const b = await readJson(ctx.req);
+    const pick = (v, allowed, def) => (allowed.includes(v) ? v : def);
+    const prefs = {
+      theme: pick(b.theme, ['dark', 'light', 'system'], 'dark'),
+      accent: pick(b.accent, ['orange', 'blue', 'green', 'purple', 'teal', 'red'], 'orange'),
+      textSize: pick(Number(b.textSize), [100, 115, 130], 100),
+      highContrast: !!b.highContrast,
+      reduceMotion: !!b.reduceMotion,
+    };
+    db.run('UPDATE users SET prefs = ? WHERE id = ?', JSON.stringify(prefs), u.id);
+    send(ctx.res, 200, prefs);
   });
 
   router.add('PUT', '/api/me/password', async (ctx) => {
@@ -235,7 +253,7 @@ export function registerWebRoutes(router, app) {
 
   // ---------------------------------------------------------------- server settings (admin)
 
-  const publicSettings = (s) => ({ serverName: s.serverName, units: s.units, mapStyleUrl: s.mapStyleUrl, plateLog: !!(s.plateSearch && s.plateLog) });
+  const publicSettings = (s) => ({ serverName: s.serverName, units: s.units, mapStyleUrl: s.mapStyleUrl, plateLog: !!(s.plateSearch && s.plateLog), plateSearch: !!s.plateSearch });
 
   router.add('GET', '/api/settings', (ctx) => {
     requireAdmin(ctx);
@@ -952,6 +970,26 @@ export function registerWebRoutes(router, app) {
     ctx.res.end('\ufeff' + lines.join('\r\n') + '\r\n'); // BOM so Excel reads UTF-8
   });
 
+  // ---------------------------------------------------------------- live view
+  registerLiveViewRoutes(router, app, { requireUser, requireCamera, carRole });
+
+  // ---------------------------------------------------------------- plates in one clip
+
+  router.add('GET', '/api/clips/:id/plates', (ctx) => {
+    const u = requireUser(ctx);
+    const c = clipFor(u, ctx.params.id);
+    const s = getSettings(db);
+    if (!s.plateSearch) throw new HttpError(403, 'License plate reading is turned off (Settings → License plates).');
+    const reads = db.all('SELECT id, plate, offset_ms, confidence, corrected FROM plate_reads WHERE clip_id = ? ORDER BY offset_ms', c.id);
+    audit(db, { user: u, action: 'clip plates viewed', target: `${c.car_name} · ${c.file_name}`, ip: ctx.ip, detail: `${reads.length} readings` });
+    send(ctx.res, 200, {
+      analyzed: !!db.get('SELECT plates_indexed FROM clips WHERE id = ?', c.id)?.plates_indexed,
+      plateLog: !!s.plateLog,
+      reads: reads.map((r) => ({ id: r.id, plate: r.plate, offsetMs: r.offset_ms, confidence: r.confidence, corrected: !!r.corrected,
+        cropUrl: `/api/plates/reads/${r.id}/crop` })),
+    });
+  });
+
   // ---------------------------------------------------------------- share links and incident reports
   const shared = { ...app, serveFile, helpers: { visibleCarIds } };
   registerShareRoutes(router, shared, { requireUser, clipFor });
@@ -1220,7 +1258,9 @@ export function registerWebRoutes(router, app) {
   });
 
   router.add('GET', '/api/plates/reads/:id/crop', async (ctx) => {
-    const u = requirePlateLog(ctx);
+    // Crops are shown in a clip's plate list too, so they only need plate reading on (not the plate log).
+    const u = requireUser(ctx);
+    if (!getSettings(db).plateSearch) throw new HttpError(403, 'License plate reading is turned off.');
     const r = readFor(u, ctx.params.id, false);
     const file = await plateCrop(db, r, r.path);
     serveFile(ctx, file, 'image/jpeg', { 'Cache-Control': 'private, max-age=86400' });

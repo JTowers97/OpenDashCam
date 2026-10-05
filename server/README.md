@@ -33,6 +33,16 @@ built-in database; an optional second container adds smart search.
   deletions and every look at license plate data (admins see everyone's; others see their own)
 - **Database backups:** a daily copy of the database in `data/backups` (time and number kept are adjustable),
   plus "Back up now" and downloads in Settings
+- **Display and accessibility:** each person can choose dark or light theme (or follow the device), an accent
+  color, larger text, high contrast and reduced motion (Settings → Display). Works with keyboards and screen readers
+- **Live view:** on the Map or Cars page, see what a car's cameras see right now (1–2 pictures a second, each
+  camera side by side). Works while ODC is recording on a phone in the car with **Allow live view** turned on in
+  the app (off by default); it works over mobile data, with no ports to open on the phone's side. Sessions last
+  2 minutes unless extended (up to 15), and end when nobody is watching. The phone shows a notification while
+  being watched; owners are notified when someone else starts a live view; only owners and managers can use it,
+  and every live view is in the activity log
+- **Plates in a clip:** with license plate reading on, the clip player's **Plates** button lists the plates read
+  in that clip, with a cropped image and the moment each appears (click to jump there)
 - **Arrival alerts:** mark places on the Map (Alert places) and get a notification when a car arrives or
   leaves. Each person's places and alerts are their own
 - **Speed alerts:** per car, when it stays above a speed you set for at least 10 seconds (needs live

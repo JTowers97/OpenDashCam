@@ -287,6 +287,7 @@ const COLUMNS = [
   ['users', 'quota_gb', 'REAL'],                // null = no per-person limit (cars they own)
   ['sessions', 'user_agent', 'TEXT'],
   ['clips', 'trimmed_from', 'TEXT'],
+  ['users', 'prefs', 'TEXT'],                 // JSON: display preferences (theme, accent, text size, contrast, motion)
   ['cars', 'speed_alert_kmh', 'REAL'],        // null = no speed alert
   ['cars', 'viofo_url', 'TEXT'],              // Viofo dashcam address on the home network, e.g. http://192.168.1.60
   ['cars', 'viofo_folders', 'TEXT'],          // which folders to import: movie,parking,ro
