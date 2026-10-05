@@ -34,6 +34,25 @@ jobs:
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon --stacktrace
 
+      # Google Play requires native libraries to support 16 KB memory pages (Android 15+ devices).
+      - name: Check native libraries for 16 KB page alignment
+        run: |
+          apk=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          rm -rf /tmp/apk && mkdir -p /tmp/apk && unzip -q -o "$apk" 'lib/*' -d /tmp/apk || true
+          bad=0
+          for so in $(find /tmp/apk/lib/arm64-v8a /tmp/apk/lib/x86_64 -name '*.so' 2>/dev/null); do
+            min=$(readelf -lW "$so" | awk '$1 == "LOAD" { print $NF }' | while read a; do echo $((a)); done | sort -n | head -1)
+            if [ -z "$min" ] || [ "$min" -lt 16384 ]; then
+              echo "::warning::$(basename "$so") ($(basename "$(dirname "$so")")) is aligned to ${min:-?} bytes; Google Play needs 16384"
+              bad=1
+            else
+              echo "OK  $(basename "$(dirname "$so")")/$(basename "$so"): $min"
+            fi
+          done
+          za=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/zipalign
+          if "$za" -c -P 16 -v 4 "$apk" > /dev/null; then echo "OK  APK is 16 KB zip-aligned"; else echo "::warning::APK isn't 16 KB zip-aligned"; bad=1; fi
+          if [ $bad -eq 0 ]; then echo "All native libraries are 16 KB compatible."; else echo "Some libraries need updating before a Google Play release (see warnings)."; fi
+
       - name: Decode release key
         if: env.HAS_RELEASE_KEY == 'true'
         env:
@@ -47,7 +66,7 @@ jobs:
           ODC_KEYSTORE_PASSWORD: ${{ secrets.ODC_KEYSTORE_PASSWORD }}
           ODC_KEY_ALIAS: ${{ secrets.ODC_KEY_ALIAS }}
           ODC_KEY_PASSWORD: ${{ secrets.ODC_KEY_PASSWORD }}
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: gradle assembleRelease bundleRelease --no-daemon --stacktrace
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v5
@@ -62,9 +81,18 @@ jobs:
           name: OpenDashCam-release-apk
           path: app/build/outputs/apk/release/*.apk
 
+      # The Android App Bundle is what Google Play takes (Play Console → Create release → upload the .aab).
+      - name: Upload release bundle (for Google Play)
+        if: env.HAS_RELEASE_KEY == 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: OpenDashCam-release-aab
+          path: app/build/outputs/bundle/release/*.aab
+
       # Releases get the signed APK once a release key is set up; until then, the debug APK as before.
       - name: Attach APK to release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.HAS_RELEASE_KEY == 'true' && 'app/build/outputs/apk/release/*.apk' || 'app/build/outputs/apk/debug/*.apk' }}
+          # (The .aab for Google Play is in the run's artifacts; it isn't attached because it can't be installed directly.)
