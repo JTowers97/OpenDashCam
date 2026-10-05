@@ -18,16 +18,16 @@ jobs:
       # Release signing turns on only when the ODC_KEYSTORE_BASE64 secret exists (see README → Release signing).
       HAS_RELEASE_KEY: ${{ secrets.ODC_KEYSTORE_BASE64 != '' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
       - uses: android-actions/setup-android@v4
 
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.11.1'
 
@@ -69,14 +69,14 @@ jobs:
         run: gradle assembleRelease bundleRelease --no-daemon --stacktrace
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: OpenDashCam-debug-apk
           path: app/build/outputs/apk/debug/*.apk
 
       - name: Upload release APK
         if: env.HAS_RELEASE_KEY == 'true'
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: OpenDashCam-release-apk
           path: app/build/outputs/apk/release/*.apk
@@ -84,7 +84,7 @@ jobs:
       # The Android App Bundle is what Google Play takes (Play Console → Create release → upload the .aab).
       - name: Upload release bundle (for Google Play)
         if: env.HAS_RELEASE_KEY == 'true'
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: OpenDashCam-release-aab
           path: app/build/outputs/bundle/release/*.aab
@@ -92,7 +92,7 @@ jobs:
       # Releases get the signed APK once a release key is set up; until then, the debug APK as before.
       - name: Attach APK to release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ env.HAS_RELEASE_KEY == 'true' && 'app/build/outputs/apk/release/*.apk' || 'app/build/outputs/apk/debug/*.apk' }}
           # (The .aab for Google Play is in the run's artifacts; it isn't attached because it can't be installed directly.)
