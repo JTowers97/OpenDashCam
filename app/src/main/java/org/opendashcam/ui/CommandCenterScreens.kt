@@ -100,7 +100,7 @@ fun ServerImage(settings: OdcSettings, url: String?, modifier: Modifier, content
 // ---------------------------------------------------------------- sign in
 
 @Composable
-fun CcSignInScreen(settings: OdcSettings, onDone: () -> Unit, onBack: () -> Unit, modifier: Modifier = Modifier) {
+fun CcSignInScreen(settings: OdcSettings, onDone: () -> Unit, onBack: () -> Unit, modifier: Modifier = Modifier, embedded: Boolean = false) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var url by remember { mutableStateOf(settings.ccUrl.ifBlank { settings.serverUrl }) }
@@ -111,8 +111,10 @@ fun CcSignInScreen(settings: OdcSettings, onDone: () -> Unit, onBack: () -> Unit
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val notifPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        ScreenHeader("Command Center", onBack)
+    // Embedded in first-run setup (which scrolls itself): no scrolling or padding of its own.
+    val outer = if (embedded) modifier.fillMaxWidth() else modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
+    Column(outer, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (embedded) Text("Command Center", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) else ScreenHeader("Command Center", onBack)
         Text("Manage your ODC Server from this phone and get its alerts (impacts with their photo, arrivals, speeding and more). Sign in with your ODC Server account.",
             style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedTextField(url, { url = it }, label = { Text("Server address") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
@@ -141,81 +143,6 @@ fun CcSignInScreen(settings: OdcSettings, onDone: () -> Unit, onBack: () -> Unit
             }
         }) { Text(if (busy) "Signing in…" else "Sign in") }
         Hint("This phone appears in the server's Signed-in devices, where it can be signed out at any time.")
-    }
-}
-
-// ---------------------------------------------------------------- home: cars and alerts
-
-@Composable
-fun CcHomeScreen(settings: OdcSettings, onOpenAlert: (Long, Long) -> Unit, onDashcamMode: () -> Unit, onSettings: () -> Unit, modifier: Modifier = Modifier) {
-    var reload by remember { mutableIntStateOf(0) }
-    val data by produceState<Pair<JSONArray, JSONArray>?>(null, reload) {
-        value = withContext(Dispatchers.IO) {
-            try {
-                val c = CommandCenter.client(settings)
-                Pair(c.callArray("GET", "/api/cars"), c.call("GET", "/api/me/notifications?limit=50").getJSONArray("notifications"))
-            } catch (e: Exception) { null }
-        }
-    }
-    Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Command Center", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            TextButton(onClick = onDashcamMode) { Text("Dashcam Mode") }
-            TextButton(onClick = onSettings) { Text("Settings") }
-        }
-        val d = data
-        if (d == null) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CircularProgressIndicator(Modifier.width(20.dp).height(20.dp))
-                Text("Loading… (check the connection to ${settings.ccUrl} if this stays)")
-                TextButton(onClick = { reload++ }) { Text("Retry") }
-            }
-            return@Column
-        }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            item { Text("Cars", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
-            items((0 until d.first.length()).map { d.first.getJSONObject(it) }) { car ->
-                val cams = car.optJSONArray("cameras") ?: JSONArray()
-                val recording = (0 until cams.length()).any { cams.getJSONObject(it).optBoolean("recording") }
-                val seen = (0 until cams.length()).maxOfOrNull { cams.getJSONObject(it).optLong("lastSeenAt") } ?: 0L
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(car.optString("name"), fontWeight = FontWeight.Bold)
-                        Hint(listOfNotNull(
-                            if (recording) "● Recording" else null,
-                            "${cams.length()} camera${if (cams.length() == 1) "" else "s"}",
-                            if (seen > 0) "last seen ${whenText(seen)}" else null,
-                        ).joinToString(" · "))
-                    }
-                }
-            }
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Alerts", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { reload++ }) { Text("Refresh") }
-                }
-            }
-            val alerts = (0 until d.second.length()).map { d.second.getJSONObject(it) }.reversed()
-            if (alerts.isEmpty()) item { Hint("No alerts yet.") }
-            items(alerts, key = { it.optLong("id") }) { n ->
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    modifier = Modifier.fillMaxWidth().clickable { onOpenAlert(if (n.isNull("eventId")) 0L else n.optLong("eventId"), n.optLong("id")) },
-                ) {
-                    Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        val img = n.optString("imageUrl").takeIf { it.isNotBlank() && it != "null" }
-                        if (img != null) {
-                            ServerImage(settings, img, Modifier.width(96.dp).height(54.dp).clip(RoundedCornerShape(6.dp)))
-                        }
-                        Column(Modifier.padding(start = if (img != null) 10.dp else 0.dp).weight(1f)) {
-                            Text(n.optString("title"), fontWeight = if (n.optBoolean("read")) FontWeight.Normal else FontWeight.Bold)
-                            Hint("${n.optString("body")} · ${whenText(n.optLong("t"))}")
-                        }
-                    }
-                }
-            }
-            item { Hint("More of your server (timeline, map, trips, live view) comes to Command Center in the next versions.") }
-        }
     }
 }
 

@@ -72,6 +72,12 @@ class OdcSettings(context: Context) {
     /** Short spoken announcements (recording started, parking mode, impact…). */
     var spokenFeedback by bool("spoken_feedback", false)
 
+    /** Version of the remote settings changes (from Command Center) this phone has applied. */
+    var remoteSettingsApplied by int("remote_settings_applied", 0)
+
+    /** A phone that lives in the car: Command Center is hidden, so it never holds a sign-in to the account. */
+    var dashcamOnly by bool("dashcam_only", false)
+
     // Command Center: this phone signed in to an ODC Server account
     var ccEnabled by bool("cc_enabled", false)
     var ccDefault by bool("cc_default", false)          // open the app in Command Center

@@ -212,7 +212,7 @@ fun HomeScreen(
                 if (!active && parkingSpot(settings) != null) {
                     TextButton(onClick = onOpenParking) { Text("Where I parked") }
                 }
-                if (settings.ccEnabled && settings.ccSignedIn) {
+                if (!settings.dashcamOnly && settings.ccEnabled && settings.ccSignedIn) {
                     TextButton(onClick = onOpenCommandCenter) { Text("Command Center") }
                 }
 

@@ -60,6 +60,7 @@ object ServerReporter {
                     .put("recording", recording).put("mode", mode).put("storageFreeBytes", storageFree)
                     .put("appVersion", AppVersion.full).put("deviceModel", "${Build.MANUFACTURER} ${Build.MODEL}")
             )
+            RemoteSettings.sync(context)
         }
     }
 

@@ -68,6 +68,8 @@ class MainActivity : FragmentActivity() {
     override fun onResume() {
         super.onResume()
         if (settings.onboardingDone && settings.smbEnabled) BackupScheduler.kick(this)
+        // Remote settings from Command Center: pick up any changes when the app opens.
+        if (settings.serverPaired) org.opendashcam.backup.RemoteSettings.syncInBackground(this)
         // Command Center alerts over the direct connection: make sure it's running.
         if (settings.ccSignedIn && settings.ccDelivery == "direct") org.opendashcam.command.AlertConnectionService.start(this)
         // Tracking-only mode: make sure it's running (e.g. after the app was updated or Android stopped it).
@@ -97,7 +99,7 @@ fun OdcRoot(settings: OdcSettings, autoStartRequests: Int, openAlert: Pair<Long,
         mutableStateOf(
             when {
                 !settings.onboardingDone -> Screen.ONBOARDING
-                settings.ccEnabled && settings.ccSignedIn && settings.ccDefault -> Screen.CC_HOME
+                !settings.dashcamOnly && settings.ccEnabled && settings.ccSignedIn && settings.ccDefault -> Screen.CC_HOME
                 else -> Screen.HOME
             }
         )
@@ -146,7 +148,11 @@ fun OdcRoot(settings: OdcSettings, autoStartRequests: Int, openAlert: Pair<Long,
         }
         when (screen) {
             Screen.ONBOARDING -> OnboardingScreen(settings) { customize ->
-                screen = if (customize) Screen.SETTINGS else Screen.HOME
+                screen = when {
+                    customize -> Screen.SETTINGS
+                    !settings.dashcamOnly && settings.ccSignedIn && settings.ccDefault -> Screen.CC_HOME
+                    else -> Screen.HOME
+                }
             }
             // The recording screen stays dark whatever the theme: it's used in the car, often at night.
             Screen.HOME -> OdcTheme(forceDark = true) {
@@ -163,7 +169,7 @@ fun OdcRoot(settings: OdcSettings, autoStartRequests: Int, openAlert: Pair<Long,
             }
             Screen.PARKING -> ParkingScreen(settings, onBack = { screen = Screen.HOME }, modifier = Modifier.safeDrawingPadding())
             Screen.CC_SIGNIN -> CcSignInScreen(settings, onDone = { screen = Screen.CC_HOME }, onBack = { screen = Screen.SETTINGS }, modifier = Modifier.safeDrawingPadding())
-            Screen.CC_HOME -> CcHomeScreen(
+            Screen.CC_HOME -> CommandCenterApp(
                 settings,
                 onOpenAlert = { e, n -> ccEventId = e; ccNotificationId = n; screen = Screen.CC_ALERT },
                 onDashcamMode = { screen = Screen.HOME },

@@ -46,6 +46,7 @@ class BackupWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     private fun runBackup(): Result {
         val ctx = applicationContext
         val settings = OdcSettings(ctx)
+        RemoteSettings.sync(ctx) // pick up any settings changed from Command Center
         val smbOn = BackupQueue.smbOn(settings)
         val serverOn = BackupQueue.serverOn(settings)
         if (!smbOn && !serverOn) return Result.success()

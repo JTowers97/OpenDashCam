@@ -17,7 +17,7 @@ android {
         val ciBuild = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
         val commit = System.getenv("GITHUB_SHA")?.take(7) ?: "local"
         versionCode = 1000 + (ciBuild ?: 0)
-        versionName = "1.8.1"
+        versionName = "2.0.0"
         buildConfigField("String", "BUILD_LABEL", "\"${ciBuild?.let { "build $it" } ?: "local build"} · $commit\"")
     }
 
@@ -82,7 +82,7 @@ android {
 
 base {
     // APK file name includes the version: OpenDashCam-0.4.0-debug.apk
-    archivesName.set("OpenDashCam-1.8.1")
+    archivesName.set("OpenDashCam-2.0.0")
 }
 
 dependencies {

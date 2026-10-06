@@ -27,6 +27,9 @@ class ServerClient(baseUrl: String, private val token: String?, private val pin:
 
     fun me(): JSONObject = json("GET", "/api/v1/devices/me", null)
 
+    /** Remote settings: report this phone's settings, get changes made in Command Center. */
+    fun settingsExchange(body: JSONObject): JSONObject = json("POST", "/api/v1/devices/me/settings", body)
+
     fun heartbeat(body: JSONObject) {
         val t0 = System.currentTimeMillis()
         val r = json("POST", "/api/v1/devices/me/heartbeat", body)
@@ -149,6 +152,18 @@ class ServerClient(baseUrl: String, private val token: String?, private val pin:
 
     /** Any request to the server's API, signed in with this client's key. */
     fun call(method: String, path: String, body: JSONObject? = null): JSONObject = json(method, path, body)
+
+    /** Streams a download (e.g. an incident report) into `out`. */
+    fun downloadTo(path: String, out: java.io.OutputStream) {
+        val c = open("GET", path)
+        c.readTimeout = 120_000
+        try {
+            if (c.responseCode !in 200..299) throw ServerException(c.responseCode, errorMessage(c))
+            c.inputStream.use { it.copyTo(out, 256 * 1024) }
+        } finally {
+            c.disconnect()
+        }
+    }
 
     /** A request whose answer is a list (e.g. /api/cars). */
     fun callArray(method: String, path: String): org.json.JSONArray {
