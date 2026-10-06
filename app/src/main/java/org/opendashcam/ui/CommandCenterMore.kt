@@ -94,6 +94,7 @@ internal fun CcMoreScreen(settings: OdcSettings, onBack: () -> Unit, onCcSetting
         }
         entry("Command Center settings", "Alerts on this phone, alert types, opening the app in Command Center, sign out", onCcSettings)
         if (plateLog) entry("License plate log", "Plates your cameras have read, and where they were seen") { onOpen("plates") }
+        entry("Background work", "What the server and its ML container are working on: blurring, reports, imports, footage analysis") { onOpen("background") }
         entry("Shared links", "Links to clips you've shared, and turning them off") { onOpen("shares") }
         entry("Signed-in devices", "Browsers and phones signed in to your account") { onOpen("sessions") }
         if (admin) {
@@ -361,6 +362,78 @@ internal fun CcPlateScreen(settings: OdcSettings, plate: String, onBack: () -> U
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- background work
+
+@Composable
+internal fun CcBackgroundScreen(settings: OdcSettings, onBack: () -> Unit, modifier: Modifier = Modifier) {
+    var data by remember { mutableStateOf<Result<JSONObject>?>(null) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) { data = runCatching { get(settings, "/api/background") }; delay(3000) }
+    }
+    val kinds = mapOf("share" to "Share link", "report" to "Incident report", "import" to "Memory card import")
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        ScreenHeader("Background work", onBack)
+        val r = data
+        when {
+            r == null -> Hint("Loading…")
+            r.isFailure -> Text(r.exceptionOrNull()?.message ?: "Couldn't load", color = MaterialTheme.colorScheme.error)
+            else -> {
+                val d = r.getOrThrow()
+                SectionHeader("Jobs")
+                val jobs = d.getJSONArray("jobs").list()
+                if (jobs.isEmpty()) Hint("Nothing running. Share links with blurring, incident reports and memory card imports show here.")
+                jobs.forEach { j ->
+                    Column(Modifier.padding(vertical = 4.dp)) {
+                        val status = when (j.optString("status")) {
+                            "queued" -> "Waiting (" + (if (j.optInt("queuePosition") == 1) "next" else "${j.optInt("queuePosition")} in line") + ")"
+                            "running" -> "${(j.optDouble("progress") * 100).toInt()}%"
+                            "done" -> "Done"
+                            else -> "Failed"
+                        }
+                        Text((j.str("title") ?: kinds[j.optString("kind")] ?: j.optString("kind")) + " · " + status, fontWeight = FontWeight.Bold)
+                        if (j.optString("status") == "running") {
+                            LinearProgressIndicator(progress = { j.optDouble("progress").toFloat() }, modifier = Modifier.fillMaxWidth())
+                            Hint(j.optString("step"))
+                        }
+                        j.str("error")?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                    }
+                }
+                SectionHeader("ML container")
+                val ml = d.optJSONObject("ml")
+                when {
+                    ml == null -> Hint("Not set up (smart search, plate reading and blurring need the optional ML container).")
+                    !ml.optBoolean("reachable") -> Text("Can't reach the ML container. Check that it's running.", color = MaterialTheme.colorScheme.error)
+                    else -> {
+                        val blur = (ml.optJSONArray("blur") ?: JSONArray()).list()
+                        Text("Right now: " + (ml.str("busy")?.let { "$it (${ml.optInt("busySeconds")} s)" } ?: if (blur.any { it.optString("status") == "running" }) "Blurring" else "Idle"))
+                        blur.forEachIndexed { i, b ->
+                            Hint((if (b.optString("status") == "running") "Blurring ${(b.optDouble("progress") * 100).toInt()}%" else "Waiting to blur ($i ahead)") + ": " + (b.str("src") ?: "a clip"))
+                        }
+                    }
+                }
+                SectionHeader("Footage analysis")
+                val ix = d.getJSONObject("indexing")
+                listOf("smartSearch" to ("Smart search" to "analyzed"), "plates" to ("License plates" to "read")).forEach { (k, l) ->
+                    val x = ix.getJSONObject(k)
+                    Text("${l.first}: " + when { !x.optBoolean("on") -> "off"; x.optInt("waiting") > 0 -> "${x.optInt("waiting")} clips waiting to be ${l.second}"; else -> "up to date" })
+                    x.str("lastError")?.let { Text("Last problem: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                }
+                val viofo = d.getJSONArray("viofo").list()
+                if (viofo.isNotEmpty()) {
+                    SectionHeader("Dashcam imports")
+                    viofo.forEach { v -> Hint("${v.optString("car")}: ${v.optString("message")}") }
+                }
+                val errors = d.getJSONArray("errors").list()
+                if (errors.isNotEmpty()) {
+                    SectionHeader("Recent unexpected errors")
+                    Hint("The server kept running. They're also in data/logs/errors.log; include them when reporting a problem.")
+                    errors.forEach { e -> Text("${stamp(e.optLong("t"))} · ${e.optString("where")}: ${e.optString("message")}", style = MaterialTheme.typography.bodySmall) }
                 }
             }
         }

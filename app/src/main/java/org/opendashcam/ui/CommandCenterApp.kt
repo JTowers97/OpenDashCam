@@ -109,6 +109,7 @@ private sealed class CcRoute {
     data object Sessions : CcRoute()
     data object People : CcRoute()
     data object ServerSettings : CcRoute()
+    data object Background : CcRoute()
 }
 
 private enum class CcTab(val label: String, val icon: String) { ALERTS("Alerts", "🔔"), TIMELINE("Timeline", "🎞"), MAP("Map", "🗺"), TRIPS("Trips", "🛣"), CARS("Cars", "🚗") }
@@ -167,7 +168,8 @@ fun CommandCenterApp(
             is CcRoute.Live -> CcLiveViewScreen(settings, top.carId, top.name, back, modifier)
             CcRoute.Search -> CcSearchScreen(settings, back, onOpenClip = { open(CcRoute.Clip(it)) }, modifier = modifier)
             CcRoute.More -> CcMoreScreen(settings, back, onCcSettings = onSettings, onOpen = { where ->
-                open(when (where) { "plates" -> CcRoute.PlateLog; "shares" -> CcRoute.Shares; "sessions" -> CcRoute.Sessions; "people" -> CcRoute.People; else -> CcRoute.ServerSettings })
+                open(when (where) { "plates" -> CcRoute.PlateLog; "shares" -> CcRoute.Shares; "sessions" -> CcRoute.Sessions; "people" -> CcRoute.People;
+                    "background" -> CcRoute.Background; else -> CcRoute.ServerSettings })
             }, modifier = modifier)
             is CcRoute.PhoneSettings -> CcPhoneSettingsScreen(settings, top.cameraId, top.label, back, modifier)
             CcRoute.PlateLog -> CcPlateLogScreen(settings, back, onOpenPlate = { open(CcRoute.Plate(it)) }, modifier = modifier)
@@ -176,6 +178,7 @@ fun CommandCenterApp(
             CcRoute.Sessions -> CcSessionsScreen(settings, back, modifier)
             CcRoute.People -> CcPeopleScreen(settings, back, modifier)
             CcRoute.ServerSettings -> CcServerSettingsScreen(settings, back, modifier)
+            CcRoute.Background -> CcBackgroundScreen(settings, back, modifier)
         }
         return
     }
@@ -487,11 +490,16 @@ private fun CcSearchScreen(settings: OdcSettings, onBack: () -> Unit, onOpenClip
 
 @Composable
 private fun CcMapTab(settings: OdcSettings, onLive: (Long, String) -> Unit) {
+    val context = LocalContext.current
     var cars by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var ready by remember { mutableStateOf(JSONObject()) }
     var selected by remember { mutableStateOf<JSONObject?>(null) }
     val mapRef = remember { mutableStateOf<Pair<MapLibreMap, Style>?>(null) }
     var fitted by remember { mutableStateOf(false) }
+    // Route of one car on one day (null car = live positions only)
+    var routeCar by rememberSaveable { mutableStateOf<Long?>(null) }
+    var day by rememberSaveable { mutableStateOf(startOfDay(System.currentTimeMillis())) }
+    var routeInfo by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         while (isActive) {
             runCatching { cars = ccGetArray(settings, "/api/live").objects() }
@@ -508,7 +516,7 @@ private fun CcMapTab(settings: OdcSettings, onLive: (Long, String) -> Unit) {
                 addStringProperty("name", c.optString("name")); addNumberProperty("id", c.optLong("id")); addBooleanProperty("live", p.optBoolean("live"))
             }
         }))
-        if (!fitted && placed.isNotEmpty()) {
+        if (!fitted && routeCar == null && placed.isNotEmpty()) {
             fitted = true
             if (placed.size == 1) {
                 val p = placed[0].getJSONObject("position")
@@ -520,8 +528,28 @@ private fun CcMapTab(settings: OdcSettings, onLive: (Long, String) -> Unit) {
             }
         }
     }
+    // The chosen car's route for the chosen day.
+    LaunchedEffect(routeCar, day, mapRef.value) {
+        val (map, style) = mapRef.value ?: return@LaunchedEffect
+        val src = style.getSource("route") as? GeoJsonSource
+        val id = routeCar
+        if (id == null) { src?.setGeoJson(FeatureCollection.fromFeatures(emptyList())); routeInfo = null; return@LaunchedEffect }
+        routeInfo = "Loading…"
+        val pts = runCatching { ccGetArray(settings, "/api/cars/$id/route?from=$day&to=${day + 86_400_000L - 1}").objects() }.getOrElse { routeInfo = it.message; return@LaunchedEffect }
+        if (pts.size < 2) { src?.setGeoJson(FeatureCollection.fromFeatures(emptyList())); routeInfo = "No driving recorded on ${dayText(day)}."; return@LaunchedEffect }
+        val line = pts.map { Point.fromLngLat(it.getDouble("lon"), it.getDouble("lat")) }
+        src?.setGeoJson(Feature.fromGeometry(LineString.fromLngLats(line)))
+        var meters = 0.0
+        for (i in 1 until pts.size) meters += haversine(pts[i - 1].getDouble("lat"), pts[i - 1].getDouble("lon"), pts[i].getDouble("lat"), pts[i].getDouble("lon"))
+        routeInfo = "${dayText(day)} · ${distText(settings, meters)} · ${clockText(pts.first().optLong("t"))}–${clockText(pts.last().optLong("t"))}"
+        val b = LatLngBounds.Builder()
+        line.forEach { b.include(LatLng(it.latitude(), it.longitude())) }
+        map.moveCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 80))
+    }
     Box(Modifier.fillMaxSize()) {
         OdcMap(Modifier.fillMaxSize()) { map, style ->
+            style.addSource(GeoJsonSource("route"))
+            style.addLayer(LineLayer("route-line", "route").withProperties(PropertyFactory.lineColor("#FF5A36"), PropertyFactory.lineWidth(4f)))
             style.addSource(GeoJsonSource("cars"))
             style.addLayer(CircleLayer("cars-dot", "cars").withProperties(
                 PropertyFactory.circleRadius(10f),
@@ -539,7 +567,31 @@ private fun CcMapTab(settings: OdcSettings, onLive: (Long, String) -> Unit) {
             }
             mapRef.value = map to style
         }
-        if (cars.isNotEmpty() && cars.none { it.optJSONObject("position") != null }) {
+        // Choose live positions, or a car's route on a day
+        Column(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(selected = routeCar == null, onClick = { routeCar = null }, label = { Text("Live") })
+                cars.forEach { c -> FilterChip(selected = routeCar == c.optLong("id"), onClick = { routeCar = c.optLong("id"); selected = null }, label = { Text(c.optString("name")) }) }
+            }
+            if (routeCar != null) {
+                Card(Modifier.padding(top = 4.dp)) {
+                    Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = { day -= 86_400_000L; day = startOfDay(day + 3_600_000L) }) { Text("‹") }
+                            TextButton(onClick = {
+                                val cal = Calendar.getInstance().apply { timeInMillis = day }
+                                android.app.DatePickerDialog(context, { _, y, m, d ->
+                                    day = Calendar.getInstance().apply { set(y, m, d, 0, 0, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis
+                                }, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).apply { datePicker.maxDate = System.currentTimeMillis() }.show()
+                            }, modifier = Modifier.weight(1f)) { Text(dayText(day)) }
+                            TextButton(enabled = day + 86_400_000L <= System.currentTimeMillis(), onClick = { day = startOfDay(day + 86_400_000L + 3_600_000L) }) { Text("›") }
+                        }
+                        routeInfo?.let { Hint(it) }
+                    }
+                }
+            }
+        }
+        if (routeCar == null && cars.isNotEmpty() && cars.none { it.optJSONObject("position") != null }) {
             Hint("No positions yet. Cars appear here when a phone in them shares its location (recording with live location, or tracking-only mode).")
         }
         selected?.let { c ->
@@ -550,12 +602,25 @@ private fun CcMapTab(settings: OdcSettings, onLive: (Long, String) -> Unit) {
                     if (p != null) Hint((if (p.optBoolean("live")) "Live · " + settings.formatSpeed(p.optDouble("speed", 0.0).toFloat()) else "Last seen ${dateTimeText(p.optLong("t"))}"))
                     Row {
                         if (ready.has(c.optString("id"))) Button(onClick = { onLive(c.optLong("id"), c.optString("name")) }) { Text("● Live view") }
+                        TextButton(onClick = { routeCar = c.optLong("id"); day = startOfDay(System.currentTimeMillis()); selected = null }) { Text("Today's route") }
                         TextButton(onClick = { selected = null }) { Text("Close") }
                     }
                 }
             }
         }
     }
+}
+
+private fun startOfDay(t: Long): Long = Calendar.getInstance().apply {
+    timeInMillis = t; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+}.timeInMillis
+
+private fun haversine(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    val r = 6_371_000.0
+    val dLat = Math.toRadians(lat2 - lat1)
+    val dLon = Math.toRadians(lon2 - lon1)
+    val a = Math.sin(dLat / 2).let { it * it } + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) * Math.sin(dLon / 2).let { it * it }
+    return 2 * r * Math.asin(Math.sqrt(a))
 }
 
 // ---------------------------------------------------------------- trips
