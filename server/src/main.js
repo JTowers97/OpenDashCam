@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { getMeta, getSettings, openDb, setMeta } from './db.js';
+import { installSafetyNet } from './errors.js';
+import { resumeShares } from './shares.js';
 import { Router } from './router.js';
 import { HttpError, now, send } from './util.js';
 import { registerDeviceRoutes } from './routes-device.js';
@@ -28,6 +30,7 @@ import { notify } from './notify.js';
 for (const d of [config.dataDir, config.libraryDir, config.uploadsDir, config.cacheDir]) fs.mkdirSync(d, { recursive: true });
 
 const db = openDb(config.dbPath);
+installSafetyNet();
 const tls = loadTls(config.dataDir);
 // Readings of the date/time stamp logged before the stamp area was skipped: removed once.
 if (getMeta(db, 'stamp_readings_cleaned_v2') !== '1') {
@@ -324,3 +327,7 @@ server.listen(config.port, () => {
 const shutdown = () => { haShutdown(db); secureServer.close(); server.close(() => process.exit(0)); };
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+
+// Share links interrupted by a restart: prepare them again.
+const resumed = resumeShares(db);
+if (resumed) console.log(`Resuming ${resumed} share link${resumed === 1 ? '' : 's'} that were being prepared.`);

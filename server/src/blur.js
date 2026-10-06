@@ -46,11 +46,19 @@ export async function blurFile(db, input, output, { plates, faces, ignoreArea = 
     signal: AbortSignal.timeout(10_000),
   });
   if (!r.ok) throw new Error(`Blurring isn't available: ${(await r.json().catch(() => ({}))).error || r.status}`);
+  let last = -1;
+  let lastChange = Date.now();
+  const stallMs = Number(process.env.ODC_BLUR_STALL_MS) || 30 * 60_000;
   for (;;) {
     await new Promise((res) => setTimeout(res, 1000));
-    const s = await (await fetch(`${base}/blur/${id}`, { signal: AbortSignal.timeout(10_000) })).json();
-    onProgress(s.progress || 0);
+    const r2 = await fetch(`${base}/blur/${id}`, { signal: AbortSignal.timeout(10_000) });
+    // The ML container no longer knows this job (it restarted): stop instead of waiting forever.
+    if (r2.status === 404) throw new Error('The ML container restarted during blurring. Please try again.');
+    const s = await r2.json();
+    onProgress(s.progress || 0, s.status === 'queued' ? 'Waiting for the ML container' : 'Blurring');
     if (s.status === 'done') return;
     if (s.status === 'failed') throw new Error(`Blurring failed: ${s.error}`);
+    if (s.progress !== last) { last = s.progress; lastChange = Date.now(); }
+    else if (s.status === 'running' && Date.now() - lastChange > stallMs) throw new Error('Blurring stopped making progress. Please try again.');
   }
 }

@@ -191,6 +191,14 @@ Tapping an impact alert opens it with its photo and plays the clip from that mom
 (turn on "Upload impact and locked clips over cellular" on the dashcam phone to have it there within minutes).
 In-app playback needs the server's main address to use a regular HTTPS certificate (or http).
 
+## Background work
+
+The **Background** page (also Command Center → More → Background work) shows what the server is working on: share
+links being blurred, incident reports and memory card imports (with progress, or their place in line), what the ML
+container is doing right now and its blur queue, how much footage is waiting for smart search or plate reading, and
+Viofo imports in progress. Imports run separately from blurring and reports, so neither holds up the other. Admins
+also see recent unexpected errors: the server keeps running and writes them to `data/logs/errors.log`.
+
 ## Remote settings for dashcam phones
 
 From Command Center (Cars → a phone) or the web app (Cars → the car → a phone → Settings), owners and managers can

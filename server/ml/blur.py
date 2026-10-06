@@ -283,9 +283,17 @@ class BlurJobs:
         self.faces = None
         threading.Thread(target=self._run, daemon=True).start()
 
+    def snapshot(self):
+        """The blur queue: the running job first, then waiting ones (for ODC's Background work page)."""
+        with self.lock:
+            waiting = [q[0] for q in self.queue]
+            jobs = [{"id": k, **v} for k, v in self.jobs.items() if v["status"] in ("queued", "running")]
+        jobs.sort(key=lambda j: (j["status"] != "running", waiting.index(j["id"]) if j["id"] in waiting else 0))
+        return jobs
+
     def submit(self, job_id, src, dst, plates, faces, ignore_area="none"):
         with self.lock:
-            self.jobs[job_id] = {"status": "queued", "progress": 0.0, "error": None, "regions": 0}
+            self.jobs[job_id] = {"status": "queued", "progress": 0.0, "error": None, "regions": 0, "src": os.path.basename(src)}
             self.queue.append((job_id, src, dst, plates, faces, ignore_area))
             self.cv.notify()
 

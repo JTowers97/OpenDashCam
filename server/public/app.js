@@ -123,6 +123,7 @@ const state = { me: null, setup: null, cars: [], cleanup: [] };
 const routes = {
   timeline: pageTimeline, map: pageMap, trips: pageTrips, trip: pageTrip, cars: pageCars,
   events: pageEvents, settings: pageSettings, sync: pageSync, search: pageSearch, plates: pagePlates, plate: pagePlate,
+  background: pageBackground,
 };
 
 function parseHash() {
@@ -157,7 +158,7 @@ function render() {
     h('nav', { class: 'nav', 'aria-label': 'Main' },
       h('div', { class: 'brand' }, h('img', { src: '/icon.svg', alt: '' }), 'Open Dash Cam'),
       nav('timeline', 'Timeline'), nav('search', 'Search'), state.me.settings.plateLog ? nav('plates', 'Plates') : null, nav('map', 'Map'), nav('trips', 'Trips'), nav('cars', 'Cars'),
-      nav('events', 'Events'), nav('settings', 'Settings'),
+      nav('events', 'Events'), nav('background', 'Background'), nav('settings', 'Settings'),
       h('div', { class: 'spacer' }),
       h('div', { class: 'muted small', style: 'padding:0 .75rem' }, `${state.me.username} · v${state.me.version}`),
       h('a', { href: '#', onclick: async (e) => { e.preventDefault(); await api('POST', '/api/logout'); state.me = null; render(); } }, 'Sign out')),
@@ -2047,6 +2048,56 @@ function memoryCardImport(car) {
     status);
   refresh();
   return box;
+}
+
+/** Background work: jobs, indexing, what the ML container is doing, imports and (admins) recent errors. Refreshes itself. */
+async function pageBackground(main) {
+  main.append(h('h1', {}, 'Background work'));
+  const box = h('div', { class: 'stack' });
+  main.append(box);
+  const ago = (t) => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`; };
+  const card = (title, ...kids) => h('div', { class: 'card stack' }, h('h2', { style: 'margin:0' }, title), ...kids);
+  const bar = (p) => { const b = progressBar(); b.set(p); return b; };
+  async function draw() {
+    let d;
+    try { d = (await api('GET', '/api/background')).data; } catch (e) { box.replaceChildren(h('p', { class: 'error' }, e.message)); return; }
+    const kinds = { share: 'Share link', report: 'Incident report', import: 'Memory card import' };
+    const jobRows = d.jobs.length ? d.jobs.map((j) => h('div', { class: 'stack', style: 'gap:.2rem;padding:.4rem 0;border-top:1px solid var(--line)' },
+      h('div', { class: 'row' }, h('strong', { class: 'grow' }, j.title || kinds[j.kind] || j.kind),
+        h('span', { class: 'small', style: j.status === 'failed' ? 'color:var(--danger)' : '' },
+          j.status === 'queued' ? `Waiting (${j.queuePosition === 1 ? 'next' : `${j.queuePosition} in line`})` : j.status === 'running' ? `${Math.round(j.progress * 100)}%` : j.status === 'done' ? 'Done' : 'Failed')),
+      j.status === 'running' ? bar(j.progress) : null,
+      h('div', { class: 'muted small' }, [j.status === 'running' ? j.step : null, j.status === 'failed' ? j.error : null,
+        j.by && state.me.isAdmin ? `by ${j.by}` : null,
+        j.startedAt ? `started ${ago(j.startedAt)} ago` : `added ${ago(j.createdAt)} ago`].filter(Boolean).join(' · '))))
+      : [h('span', { class: 'muted small' }, 'Nothing running. Share links with blurring, incident reports and memory card imports show here.')];
+    const ix = d.indexing;
+    const ixRow = (name, x, what) => h('div', { class: 'small' }, h('strong', {}, name), ': ',
+      !x.on ? 'off' : x.waiting ? `${x.waiting} clips waiting to be ${what}` : 'up to date', x.failed ? ` · ${x.failed} couldn’t be read` : '',
+      x.lastError ? h('div', { class: 'error small' }, `Last problem: ${x.lastError}`) : null);
+    const ml = d.ml;
+    const mlKids = !ml ? [h('span', { class: 'muted small' }, 'Not set up (smart search, plate reading and blurring need the optional ML container).')]
+      : !ml.reachable ? [h('span', { class: 'error small' }, 'Can’t reach the ML container. Check that it’s running (docker compose --profile ml up -d).')]
+      : [
+        h('div', { class: 'small' }, h('strong', {}, 'Right now: '), ml.busy ? `${ml.busy} (${ml.busySeconds} s)` : (ml.blur || []).some((b) => b.status === 'running') ? 'Blurring' : 'Idle'),
+        ...(ml.blur || []).map((b, i) => h('div', { class: 'stack', style: 'gap:.2rem' },
+          h('div', { class: 'small' }, `${b.status === 'running' ? 'Blurring' : `Waiting to blur (${i} ahead)`}: ${b.src || 'a clip'}`, b.status === 'running' ? ` · ${Math.round(b.progress * 100)}%` : ''),
+          b.status === 'running' ? bar(b.progress) : null)),
+        h('div', { class: 'muted small' }, `Models loaded: ${[ml.models?.smartSearch && 'smart search', ml.models?.plates && 'license plates'].filter(Boolean).join(', ') || 'none yet (they load on first use)'}`),
+      ];
+    box.replaceChildren(
+      card('Jobs', ...jobRows),
+      card('ML container', ...mlKids),
+      card('Footage analysis', ixRow('Smart search', ix.smartSearch, 'analyzed'), ixRow('License plates', ix.plates, 'read'),
+        h('span', { class: 'muted small' }, 'Newest clips first, a few at a time. Settings → Analyze footage can prioritize older footage.')),
+      d.viofo.length ? card('Dashcam imports', ...d.viofo.map((v) => h('div', { class: 'small' }, h('strong', {}, v.car), ': ', v.message))) : null,
+      state.me.isAdmin && d.errors.length ? card('Recent unexpected errors',
+        h('span', { class: 'muted small' }, 'The server kept running. These are also in data/logs/errors.log; include them when reporting a problem.'),
+        ...d.errors.map((e) => h('details', {}, h('summary', { class: 'small' }, `${new Date(e.t).toLocaleString()} · ${e.where}: ${e.message}`), h('pre', { class: 'small', style: 'white-space:pre-wrap' }, e.stack)))) : null,
+    );
+  }
+  await draw();
+  const timer = setInterval(() => { if (document.contains(box)) draw(); else clearInterval(timer); }, 3000);
 }
 
 /** A dashcam phone's settings, changed remotely: the phone applies them the next time it checks in. */

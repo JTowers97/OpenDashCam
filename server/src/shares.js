@@ -40,7 +40,7 @@ export async function prepareCopy(db, clip, out, { start = null, end = null, blu
     }
     if (blurPlates || blurFaces) {
       progress(0.05, 'Blurring');
-      await blurFile(db, src === tmp ? tmp : clip.path, out, { plates: blurPlates, faces: blurFaces, ignoreArea: stampAreaFor(db, clip) }, (p) => progress(0.05 + 0.95 * p, 'Blurring'));
+      await blurFile(db, src === tmp ? tmp : clip.path, out, { plates: blurPlates, faces: blurFaces, ignoreArea: stampAreaFor(db, clip) }, (p, step) => progress(0.05 + 0.95 * p, step || 'Blurring'));
     } else if (start == null) {
       fs.copyFileSync(clip.path, out);
     }
@@ -57,6 +57,28 @@ const shareView = (db, s, base) => {
     start: s.start_s, end: s.end_s, status: s.status, error: s.error, views: s.views,
   };
 };
+
+/** Prepares a share's copy (trimmed and/or blurred) in the background. */
+function startPrepare(db, share, clip) {
+  const blur = [share.blur_plates && 'plates', share.blur_faces && 'faces'].filter(Boolean).join(' and ');
+  return startJob(share.user_id, 'share', `Share link for ${clip.file_name}${blur ? ` (blurring ${blur})` : ''}`, async ({ progress }) => {
+    try {
+      await prepareCopy(db, clip, share.file, { start: share.start_s, end: share.end_s, blurPlates: !!share.blur_plates, blurFaces: !!share.blur_faces }, progress);
+      db.run(`UPDATE shares SET status = 'ready' WHERE token = ?`, share.token);
+    } catch (e) {
+      db.run(`UPDATE shares SET status = 'failed', error = ? WHERE token = ?`, e.message, share.token);
+      throw e;
+    }
+  });
+}
+
+/** Share links still being prepared when the server stopped: start their preparation again. */
+export function resumeShares(db) {
+  const rows = db.all(`SELECT s.*, c.id AS cid FROM shares s JOIN clips c ON c.id = s.clip_id WHERE s.status = 'processing' AND s.expires_at > ?`, now());
+  for (const s of rows) startPrepare(db, s, db.get('SELECT * FROM clips WHERE id = ?', s.cid));
+  db.run(`UPDATE shares SET status = 'failed', error = 'The clip was deleted' WHERE status = 'processing' AND clip_id NOT IN (SELECT id FROM clips)`);
+  return rows.length;
+}
 
 export function registerShareRoutes(router, app, { requireUser, clipFor }) {
   const { db } = app;
@@ -88,18 +110,7 @@ export function registerShareRoutes(router, app, { requireUser, clipFor }) {
     db.run(`INSERT INTO shares(token, user_id, clip_id, created_at, expires_at, allow_download, blur_plates, blur_faces, start_s, end_s, file, status)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, token, u.id, c.id, now(), now() + hours * 3600_000, b.allowDownload ? 1 : 0,
       blurPlates ? 1 : 0, blurFaces ? 1 : 0, trim ? Number(b.start) : null, trim ? Number(b.end) : null, file, needsCopy ? 'processing' : 'ready');
-    let job = null;
-    if (needsCopy) {
-      job = startJob(u.id, 'share', `Preparing shared clip`, async ({ progress }) => {
-        try {
-          await prepareCopy(db, c, file, { start: trim ? Number(b.start) : null, end: trim ? Number(b.end) : null, blurPlates, blurFaces }, progress);
-          db.run(`UPDATE shares SET status = 'ready' WHERE token = ?`, token);
-        } catch (e) {
-          db.run(`UPDATE shares SET status = 'failed', error = ? WHERE token = ?`, e.message, token);
-          throw e;
-        }
-      });
-    }
+    const job = needsCopy ? startPrepare(db, db.get('SELECT * FROM shares WHERE token = ?', token), c) : null;
     audit(db, { user: u, action: 'share link created', target: `${c.car_name} · ${c.file_name}`, ip: ctx.ip,
       detail: [`${hours} h`, b.allowDownload ? 'download allowed' : null, blurPlates ? 'plates blurred' : null, blurFaces ? 'faces blurred' : null, trim ? `trimmed ${b.start}–${b.end} s` : null].filter(Boolean).join(', ') });
     send(ctx.res, 201, { ...shareView(db, db.get('SELECT * FROM shares WHERE token = ?', token), app.publicUrl(ctx.req)), jobId: job?.id ?? null });

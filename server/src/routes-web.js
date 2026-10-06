@@ -26,6 +26,9 @@ import { haStatus } from './homeassistant.js';
 import { importCar, listFiles } from './viofo.js';
 import { registerLiveViewRoutes } from './liveview.js';
 import { registerImportRoutes } from './sdimport.js';
+import { allJobs, jobView as backgroundJobView } from './jobs.js';
+import { recentErrors } from './errors.js';
+import { plateState } from './plates.js';
 import { registerRemoteSettingsRoutes } from './remotesettings.js';
 import { buildSummary } from './summary.js';
 import { ALERT_KINDS, notify, waitForNotification } from './notify.js';
@@ -156,6 +159,51 @@ export function registerWebRoutes(router, app) {
     if (b.all) db.run('UPDATE notifications SET read = 1 WHERE user_id = ?', u.id);
     else for (const id of (Array.isArray(b.ids) ? b.ids : []).slice(0, 500)) db.run('UPDATE notifications SET read = 1 WHERE user_id = ? AND id = ?', u.id, Number(id));
     send(ctx.res, 200, { ok: true });
+  });
+
+  // Tests only (ODC_TEST_HOOKS=1): an error outside any request, to check the server keeps running.
+  if (process.env.ODC_TEST_HOOKS === '1') {
+    router.add('POST', '/api/test/crash', (ctx) => {
+      setTimeout(() => { throw new Error('test crash'); }, 10);
+      send(ctx.res, 200, { ok: true });
+    });
+  }
+
+  /**
+   * Background work: jobs (blurring, reports, imports) with progress and queue position, what the indexers have left,
+   * what the ML container is doing right now, Viofo imports in progress, and (admins) recent unexpected errors.
+   */
+  router.add('GET', '/api/background', async (ctx) => {
+    const u = requireUser(ctx);
+    const s = getSettings(db);
+    const names = new Map(db.all('SELECT id, username FROM users').map((x) => [x.id, x.username]));
+    const jobs = allJobs()
+      .filter((j) => (u.isAdmin || j.userId === u.id) && (j.status === 'queued' || j.status === 'running' || now() - (j.finishedAt || 0) < 3600_000))
+      .sort((a, b) => ({ running: 0, queued: 1 }[a.status] ?? 2) - ({ running: 0, queued: 1 }[b.status] ?? 2) || b.createdAt - a.createdAt)
+      .map((j) => ({ ...backgroundJobView(j), result: undefined, by: names.get(j.userId) || null }));
+    let ml = null;
+    if (s.mlUrl) {
+      try {
+        const r = await fetch(`${s.mlUrl.replace(/\/$/, '')}/status`, { signal: AbortSignal.timeout(3000) });
+        ml = r.ok ? { reachable: true, ...(await r.json()) } : { reachable: true, busy: null, blur: [], models: {} };
+      } catch {
+        ml = { reachable: false };
+      }
+    }
+    const cut = s.plateRetentionDays > 0 ? now() - s.plateRetentionDays * 86400_000 : 0;
+    send(ctx.res, 200, {
+      jobs,
+      indexing: {
+        smartSearch: { on: !!s.smartSearch, waiting: db.get('SELECT COUNT(*) n FROM clips WHERE indexed = 0 AND encrypted = 0').n,
+          failed: db.get('SELECT COUNT(*) n FROM clips WHERE indexed = -1').n, lastError: indexerState.lastError || null },
+        plates: { on: !!s.plateSearch, waiting: db.get('SELECT COUNT(*) n FROM clips WHERE plates_indexed = 0 AND encrypted = 0 AND started_at >= ?', cut).n,
+          lastError: plateState.lastError || null },
+      },
+      ml,
+      viofo: db.all("SELECT name, viofo_status FROM cars WHERE viofo_url IS NOT NULL AND viofo_url != ''")
+        .map((c) => ({ car: c.name, ...(safeJson(c.viofo_status) || {}) })).filter((c) => c.state === 'importing'),
+      errors: u.isAdmin ? recentErrors.slice(0, 10) : [],
+    });
   });
 
   /** A test alert to this person: shows in their inbox, apps and browsers. */

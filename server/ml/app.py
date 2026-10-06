@@ -116,7 +116,21 @@ class ClipModel:
         return self.model.encode([t], convert_to_numpy=True, normalize_embeddings=True)[0]
 
 
-state = {"model": None, "error": None, "plates": None, "plates_error": None}
+state = {"model": None, "error": None, "plates": None, "plates_error": None, "busy": None, "busy_since": None}
+import time as _time
+
+
+class Busy:
+    """Records what the ML container is doing right now (shown in ODC's Background work)."""
+
+    def __init__(self, what):
+        self.what = what
+
+    def __enter__(self):
+        state["busy"], state["busy_since"] = self.what, _time.time()
+
+    def __exit__(self, *a):
+        state["busy"], state["busy_since"] = None, None
 plates_lock = threading.Lock()
 
 
@@ -180,6 +194,13 @@ class Handler(BaseHTTPRequestHandler):
             p = parse_qs(urlparse(self.path).query).get("path", [""])[0]
             ok = p.startswith(("/", "C:")) and os.path.isfile(p)
             return self._send(200, {"readable": ok})
+        if self.path == "/status":
+            # What this container is doing, for ODC's Background work page.
+            return self._send(200, {
+                "busy": state["busy"], "busySeconds": round(_time.time() - state["busy_since"]) if state["busy_since"] else None,
+                "models": {"smartSearch": state["model"] is not None, "plates": state["plates"] is not None},
+                "blur": blur_jobs.snapshot(),
+            })
         if self.path.startswith("/blur/"):
             job = blur_jobs.get(self.path[len("/blur/"):])
             return self._send(200 if job else 404, job or {"error": "unknown job"})
@@ -207,7 +228,7 @@ class Handler(BaseHTTPRequestHandler):
             if pm is None:
                 return self._send(503, {"error": state["plates_error"] or "plate models unavailable"})
             try:
-                with lock:
+                with lock, Busy("Reading license plates"):
                     plates = pm.read(img)
             except Exception as e:  # noqa: BLE001
                 return self._send(500, {"error": f"{type(e).__name__}: {e}"})
@@ -219,13 +240,13 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/embed/image":
                 img = Image.open(io.BytesIO(self._body()))
                 img.load()
-                with lock:
+                with lock, Busy("Smart search: understanding a picture"):
                     vec = m.images([img])[0]
             elif self.path == "/embed/text":
                 text = str(json.loads(self._body()).get("text", "")).strip()[:300]
                 if not text:
                     return self._send(400, {"error": "text is required"})
-                with lock:
+                with lock, Busy("Smart search: understanding a query"):
                     vec = m.text(text)
             else:
                 return self._send(404, {"error": "not found"})

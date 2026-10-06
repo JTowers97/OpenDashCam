@@ -1,5 +1,30 @@
 # Changelog
 
+## App 2.0.1 · Server 2.0.1
+- **Fixed (server):** an unexpected error could stop the server until Docker restarted it (seen as a 502 from a reverse
+  proxy). Such errors are now logged to data/logs/errors.log and listed in Background work, and the server keeps running
+- **Fixed (server):** a share link could stay "Waiting": background jobs ran one at a time across the whole server, so a
+  long memory card import held up blurring; a blur job waited forever if the ML container restarted; and links being
+  prepared during a server restart were never finished. Imports and ML work now run in separate lanes, blur jobs fail with a
+  clear message if the ML container forgets them or stops making progress, and interrupted share links resume after a restart
+- **Server:** Background work (web app → Background, and Command Center → More): jobs with progress and their place in
+  line, what the ML container is doing right now and its blur queue, footage analysis backlogs, Viofo imports in progress,
+  and (admins) recent unexpected errors
+- **App:** Command Center's map can show a car's route on any day: choose the car, then step through days or pick a date;
+  with the distance and time span
+
+## App 2.0.1 · Server 2.0.1
+- **Server + App:** Background work (web: Background; app: Command Center → More): jobs with progress or their place in
+  line, what the ML container is doing and its blur queue, footage waiting for analysis, imports, and (admins) recent
+  unexpected errors
+- **Fixed (server):** an unexpected error could stop the server until Docker restarted it (seen as a 502 from the
+  reverse proxy). It's now logged (Background work and `data/logs/errors.log`) and the server keeps running
+- **Fixed (server):** a share link could stay "Waiting": jobs ran one at a time, so a memory card import held up
+  blurring; a blur job the ML container had forgotten (after it restarted) was waited for forever; and links being
+  prepared during a server restart were never finished. Imports and blurring now run separately, forgotten or stalled
+  blur jobs fail with a clear message, and interrupted links are prepared again after a restart
+- **App:** Command Center's map can show a car's route on any day: choose the car, then the day (arrows or a date picker)
+
 ## App 2.0.0 · Server 2.0.0
 - **App:** first-run setup asks how the phone will be used (as a dashcam, to manage your ODC Server, or both) and
   covers what each needs: permissions and battery, the main recording features, pairing with your ODC Server, "Dashcam
