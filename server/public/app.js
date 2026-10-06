@@ -1360,6 +1360,7 @@ function carCard(car) {
         h('td', { class: 'small' }, c.clips ? `${c.clips} clip${c.clips === 1 ? '' : 's'} · ${fmtBytes(c.bytes)}` : 'None'),
         h('td', {}, manage ? h('div', { class: 'row' },
           h('button', { class: 'btn small', onclick: async () => { const l = prompt('Camera name', c.label); if (l) { await api('PATCH', `/api/cameras/${c.id}`, { label: l }); render(); } } }, 'Rename'),
+          c.kind === 'phone' && !c.disconnected ? h('button', { class: 'btn small', onclick: () => phoneSettingsDialog(c) }, 'Settings') : null,
           c.kind === 'phone' && !c.disconnected ? h('button', { class: 'btn small danger', onclick: async () => {
             if (!confirm(`Disconnect "${c.label}"? The phone stops uploading. Its ${c.clips} clips stay on the server, and it stays listed here until they’re gone (or you delete it).`)) return;
             await api('DELETE', `/api/cameras/${c.id}`); render();
@@ -2046,6 +2047,39 @@ function memoryCardImport(car) {
     status);
   refresh();
   return box;
+}
+
+/** A dashcam phone's settings, changed remotely: the phone applies them the next time it checks in. */
+async function phoneSettingsDialog(cam) {
+  const body = h('div', { class: 'stack' }, h('h2', { style: 'margin:0' }, `${cam.label} settings`), h('span', { class: 'muted small' }, 'Loading…'));
+  modal(body);
+  const draw = (d) => {
+    if (!d.reported) {
+      body.replaceChildren(h('h2', { style: 'margin:0' }, `${cam.label} settings`),
+        h('p', { class: 'muted' }, 'This phone hasn’t reported its settings yet. It does when it next checks in (while recording or tracking, when ODC is opened on it, or when it backs up). Update it to ODC 2.0 if it’s older.'));
+      return;
+    }
+    const pending = d.pending || {};
+    const change = async (key, value) => {
+      try { draw((await api('PUT', `/api/cameras/${cam.id}/settings`, { changes: { [key]: value } })).data); } catch (e) { toast(e.message); }
+    };
+    let group = '';
+    const rows = [];
+    for (const s of d.spec) {
+      if (s.group !== group) { group = s.group; rows.push(h('h3', { style: 'margin:.6rem 0 0' }, group)); }
+      const value = s.key in pending ? pending[s.key] : d.reported[s.key];
+      const waiting = s.key in pending ? h('span', { class: 'small', style: 'color:var(--accent)' }, ' waiting for the phone') : null;
+      const control = s.type === 'bool'
+        ? h('input', { type: 'checkbox', checked: !!value, onchange: (e) => change(s.key, e.target.checked) })
+        : h('select', { onchange: (e) => change(s.key, Number(e.target.value)) }, s.options.map(([v, l]) => h('option', { value: v, selected: v === value }, l)));
+      rows.push(h('label', { class: 'row' }, s.type === 'bool' ? control : null, h('span', { class: 'grow' }, s.label, waiting,
+        s.note ? h('div', { class: 'muted small' }, s.note) : null), s.type === 'bool' ? null : control));
+    }
+    body.replaceChildren(h('h2', { style: 'margin:0' }, `${cam.label} settings`),
+      h('p', { class: 'muted small', style: 'margin:0' }, `As reported ${fmtDateTime(d.reportedAt)}. Changes reach the phone the next time it checks in, and it shows a notification when they do. Recording settings take effect the next time it starts recording.`),
+      ...rows);
+  };
+  try { draw((await api('GET', `/api/cameras/${cam.id}/settings`)).data); } catch (e) { body.replaceChildren(h('p', { class: 'error' }, e.message)); }
 }
 
 /** Polls a background job until it finishes; calls onUpdate with each status. */

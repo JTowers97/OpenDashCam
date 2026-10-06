@@ -1,5 +1,29 @@
 # Changelog
 
+## App 2.0.0 · Server 2.0.0
+- **App:** first-run setup asks how the phone will be used (as a dashcam, to manage your ODC Server, or both) and
+  covers what each needs: permissions and battery, the main recording features, pairing with your ODC Server, "Dashcam
+  only", Command Center sign-in and how alerts arrive (UnifiedPush with an ntfy install link, or a direct connection),
+  and which mode the app opens in
+- **App:** Settings reorganized into categories (Dashcam Mode, Backup, Command Center, App, About and help), each with a
+  one-line summary, plus a search box that finds any setting
+- **App:** choose which mode the app opens in (Settings → App), and "Dashcam only" for phones that live in the car:
+  Command Center is hidden and signed out, so the phone holds no access to the account
+- **App:** Command Center has the rest of the server: share links (with blurring), incident reports saved to Downloads,
+  plates in a clip (tap to jump there), deleting clips, the license plate log, shared links, signed-in devices, and for
+  admins, people and server settings
+- **App + Server:** remote settings for dashcam phones from Command Center or the web app: changes apply the next time
+  the phone checks in, with a notification on the phone; only an allowlist of settings (no audio, privacy zones or
+  passwords); in the activity log
+
+## App 1.9.0 · Server 1.9.0
+- **App:** Command Center's everyday screens, built into the app: Alerts, Timeline (with a calendar and a car filter),
+  Map (your cars' positions, with live view), Trips (route map, driving events and clips), and Cars (cameras and their
+  footage, add a car, disconnect a phone, and pair a new dashcam phone by showing its QR code). Search by place, by
+  what's in the video, or by plate. Clips play from the server and can be locked or unlocked. Live view shows each
+  camera's pictures in the app. Back returns through what you opened
+- **Server:** checked that everything Command Center uses works with the app's sign-in
+
 ## App 1.8.1 · Server 1.8.1
 - **Fixed:** the date/time stamp was sometimes read as a license plate, and blurred when blurring plates. Plates are no
   longer read or blurred where a clip's stamp is: the bottom-left corner on ODC phone footage with the stamp on (also

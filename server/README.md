@@ -191,6 +191,15 @@ Tapping an impact alert opens it with its photo and plays the clip from that mom
 (turn on "Upload impact and locked clips over cellular" on the dashcam phone to have it there within minutes).
 In-app playback needs the server's main address to use a regular HTTPS certificate (or http).
 
+## Remote settings for dashcam phones
+
+From Command Center (Cars → a phone) or the web app (Cars → the car → a phone → Settings), owners and managers can
+change a dashcam phone's settings: resolution, frame rate, clip length, the date/time stamp, spoken feedback, parking
+mode, impact detection, GPS logging, live location and live view, backup over mobile data, start when charging,
+battery cutoff and heat protection. The phone applies changes the next time it checks in (while recording or
+tracking, when ODC is opened on it, or when it backs up) and shows a notification listing what changed. Audio
+recording, privacy zones and passwords can only be changed on the phone itself. Changes are in the activity log.
+
 ## Home Assistant (optional)
 
 ODC can publish each car to Home Assistant over MQTT. Cars appear automatically (MQTT discovery) as

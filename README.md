@@ -58,9 +58,14 @@ Free and open source. No accounts, no cloud, no ads, no tracking.
 - Connects securely over HTTPS: with a free Let's Encrypt certificate (set up automatically by the server's
   optional HTTPS container), or with the server's built-in HTTPS, which needs no domain: the pairing QR
   code tells the phone exactly which server certificate to trust
-- **Command Center** (with an ODC Server): sign in from your everyday phone to get your cars' alerts (impacts
-  with their photo, arrivals, speeding and more) as notifications, without Google services, and open the clip from
-  an alert. Dashcam Mode stays the default; Command Center can be made the default once you've signed in
+- **Two modes: Dashcam Mode and Command Center.** First-run setup asks how the phone will be used: as a dashcam, to
+  manage your ODC Server, or both. **Command Center** is your whole server in the app on your everyday phone: alerts
+  as notifications (impacts with their photo, arrivals, speeding and more, without Google services; tap to play the
+  clip), timeline and calendar, search, a map of your cars, trips with their routes, live view, cars and cameras,
+  sharing, incident reports, license plates, people and server settings. Pair a new dashcam phone by showing its QR
+  code, and change any dashcam phone's settings remotely. Choose which mode the app opens in; phones that live in the
+  car can be set to **Dashcam only**
+- **Settings in categories** (Dashcam Mode, Backup, Command Center, App, About), each with a summary, and a search box
 - Optional **spoken feedback** ("Recording started", "Parking mode", "Impact detected"), played like navigation
   directions over the car's speakers
 - Optional upload of **impact and locked clips over mobile data**, even when other backups wait for Wi-Fi
@@ -184,19 +189,9 @@ tracking-only mode (with a notification showing while it runs).
 
 ## Roadmap
 
-**2.0: Command Center.** The app gets a second mode, **Command Center**, built into the app (no embedded web pages),
-for managing everything on your ODC Server from your everyday phone: footage, search, maps, trips, live view, cars
-and cameras, sharing, reports, license plates, alerts and server settings, plus remote settings for phones used as
-dashcams. **Dashcam Mode** (today's app) stays the default; once an ODC Server is set up, Command Center can be turned
-on and made the default. Phones used only as dashcams can hide Command Center. Alerts (impacts with their photo,
-arrivals, speeding, and the rest) can go to the app as notifications, without Google services, and tapping one opens
-the clip. Planned in steps:
-- **1.9:** Command Center's everyday screens: timeline, calendar, search, map, trips, live view, cars and cameras,
-  and pairing new dashcam phones from your phone
-- **2.0:** the rest of the server in the app (sharing, reports, license plates, people, settings), remote settings
-  for dashcam phones, choosing the default mode, and dashcam-only phones
+**Next: 3.0, Camera Link.**
 
-**3.0: Camera Link.** A third mode that connects the phone directly to a dashcam's own Wi-Fi to view and download
+A third mode that connects the phone directly to a dashcam's own Wi-Fi to view and download
 its recordings, with their GPS and speed data, and offload them to the ODC Server or an SMB share. Aimed at the many
 dashcams built on Novatek chips, starting with Viofo. Camera Link can be turned on or off at any time, and can be
 made the mode the app opens in.

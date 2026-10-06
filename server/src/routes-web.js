@@ -26,6 +26,7 @@ import { haStatus } from './homeassistant.js';
 import { importCar, listFiles } from './viofo.js';
 import { registerLiveViewRoutes } from './liveview.js';
 import { registerImportRoutes } from './sdimport.js';
+import { registerRemoteSettingsRoutes } from './remotesettings.js';
 import { buildSummary } from './summary.js';
 import { ALERT_KINDS, notify, waitForNotification } from './notify.js';
 import { requireCamera } from './routes-device.js';
@@ -1091,6 +1092,7 @@ export function registerWebRoutes(router, app) {
   // ---------------------------------------------------------------- live view
   registerLiveViewRoutes(router, app, { requireUser, requireCamera, carRole });
   registerImportRoutes(router, app, { requireUser, requireCarRole });
+  registerRemoteSettingsRoutes(router, app, { requireUser, requireCamera, requireCarRole });
 
   // ---------------------------------------------------------------- plates in one clip
 

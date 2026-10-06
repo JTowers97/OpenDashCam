@@ -304,7 +304,12 @@ const COLUMNS = [
   ['users', 'quota_gb', 'REAL'],                // null = no per-person limit (cars they own)
   ['sessions', 'user_agent', 'TEXT'],
   ['clips', 'trimmed_from', 'TEXT'],
-  ['clips', 'stamp', 'INTEGER'],              // date/time stamp burned in: 1 yes, 0 no, null unknown (older uploads)
+  ['clips', 'stamp', 'INTEGER'],
+  ['cameras', 'settings_reported', 'TEXT'],     // JSON: the phone's remotely changeable settings, as last reported
+  ['cameras', 'settings_reported_at', 'INTEGER'],
+  ['cameras', 'settings_desired', 'TEXT'],      // JSON: changes waiting for the phone
+  ['cameras', 'settings_version', 'INTEGER'],   // version of those changes
+  ['cameras', 'settings_applied', 'INTEGER'],   // version the phone has applied              // date/time stamp burned in: 1 yes, 0 no, null unknown (older uploads)
   ['users', 'prefs', 'TEXT'],
   ['push_subs', 'kind', "TEXT NOT NULL DEFAULT 'browser'"],   // browser | app
   ['push_subs', 'label', 'TEXT'],                 // JSON: display preferences (theme, accent, text size, contrast, motion)
