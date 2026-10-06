@@ -65,7 +65,37 @@ async function readPlates(db, jpeg) {
   const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: jpeg, signal: AbortSignal.timeout(60_000) });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`ML service: ${data.error || r.status}`);
-  return data.plates || [];
+  return { plates: data.plates || [], width: data.width || 0, height: data.height || 0 };
+}
+
+/**
+ * Where a clip's date/time stamp is, so plates are neither read nor blurred there (the stamp's text can look like a
+ * plate, and a real plate is never legible behind it): the bottom strip for Viofo dashcams, the bottom-left corner for
+ * ODC phones with the stamp on (or when unknown, for older uploads), nothing for ODC phones without it.
+ */
+export function stampAreaFor(db, clip) {
+  const cam = db.get('SELECT token_hash FROM cameras WHERE id = ?', clip.camera_id);
+  if (cam?.token_hash?.startsWith('viofo:')) return 'bottom';
+  return clip.stamp === 0 ? 'none' : 'bottom-left';
+}
+
+/** True if a plate box's center is in that area. */
+export function inStampArea(box, w, h, area) {
+  if (!box || !w || !h || (area !== 'bottom-left' && area !== 'bottom')) return false;
+  const cx = (box[0] + box[2]) / 2;
+  const cy = (box[1] + box[3]) / 2;
+  return cy > h * 0.84 && (area === 'bottom' || cx < w * 0.5);
+}
+
+/** Removes readings already logged in the stamp area (after updating, or changing the setting). */
+export function purgeStampReadings(db) {
+  let n = 0;
+  for (const r of db.all(`SELECT r.id, r.box, c.width, c.height, c.camera_id, c.stamp FROM plate_reads r JOIN clips c ON c.id = r.clip_id WHERE r.box IS NOT NULL`)) {
+    let box;
+    try { box = JSON.parse(r.box); } catch { continue; }
+    if (inStampArea(box, r.width, r.height, stampAreaFor(db, r))) { db.run('DELETE FROM plate_reads WHERE id = ?', r.id); n++; }
+  }
+  return n;
 }
 
 let running = false;
@@ -79,7 +109,7 @@ export async function runPlateIndexer(db, limit = 20) {
   try {
     const cutoff = s.plateRetentionDays > 0 ? now() - s.plateRetentionDays * 86400_000 : 0;
     const aliases = new Map(db.all('SELECT from_plate, to_plate FROM plate_aliases').map((a) => [a.from_plate, a.to_plate]));
-    const clips = db.all(`SELECT id, path, car_id, started_at FROM clips
+    const clips = db.all(`SELECT id, path, car_id, started_at, camera_id, stamp FROM clips
       WHERE plates_indexed = 0 AND encrypted = 0 AND started_at >= ? ORDER BY started_at DESC LIMIT ?`, cutoff, limit);
     for (const c of clips) {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odc-plates-'));
@@ -91,7 +121,9 @@ export async function runPlateIndexer(db, limit = 20) {
         const best = new Map();
         for (let i = 0; i < frames.length; i++) {
           const offset = Math.round((i + 0.5) * interval * 1000);
-          for (const p of await readPlates(db, fs.readFileSync(path.join(dir, frames[i])))) {
+          const result = await readPlates(db, fs.readFileSync(path.join(dir, frames[i])));
+          for (const p of result.plates) {
+            if (inStampArea(p.box, result.width, result.height, stampAreaFor(db, c))) continue; // the date/time stamp
             const read = normalizePlate(p.text);
             const plate = aliases.get(read) || read;
             if (plate.length < 2 || p.confidence < s.plateMinConfidence) continue;

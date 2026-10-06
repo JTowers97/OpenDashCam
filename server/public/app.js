@@ -1338,20 +1338,37 @@ function carCard(car) {
 
   // Cameras
   card.append(h('h3', {}, 'Cameras'));
-  if (!car.cameras.length) card.append(h('p', { class: 'muted small' }, 'No phones connected yet.'));
-  else card.append(h('div', { style: 'overflow-x:auto' }, h('table', {},
-    h('tr', {}, ['Camera', 'Phone', 'App version', 'Last seen', 'Status', ''].map((x) => h('th', {}, x))),
-    car.cameras.map((c) => h('tr', {},
-      h('td', {}, c.label), h('td', {}, c.deviceModel || ''), h('td', { class: 'small' }, c.appVersion || ''),
-      h('td', {}, ago(c.lastSeenAt)),
-      h('td', { class: 'small' }, [c.recording ? 'Recording' : 'Idle', c.mode, c.battery != null ? `${c.battery}%${c.charging ? ' ⚡' : ''}` : null,
-        c.storageFree != null ? `${fmtBytes(c.storageFree)} free` : null].filter(Boolean).join(' · ')),
-      h('td', {}, manage ? h('div', { class: 'row' },
-        h('button', { class: 'btn small', onclick: async () => { const l = prompt('Camera name', c.label); if (l) { await api('PATCH', `/api/cameras/${c.id}`, { label: l }); render(); } } }, 'Rename'),
-        h('button', { class: 'btn small danger', onclick: async () => {
-          if (!confirm(`Disconnect "${c.label}"? The phone stops uploading. Its footage stays on the server.`)) return;
-          await api('DELETE', `/api/cameras/${c.id}`); render();
-        } }, 'Disconnect')) : null))))));
+  if (!car.cameras.length) card.append(h('p', { class: 'muted small' }, 'No cameras yet.'));
+  else {
+    const purge = async (c) => {
+      const what = c.clips ? `and its ${c.clips} clips (${fmtBytes(c.bytes)})` : '';
+      if (!confirm(`Delete "${c.label}" ${what} from the server? This can’t be undone. Trips and GPS history are kept.`)) return;
+      await api('DELETE', `/api/cameras/${c.id}?purge=1`);
+      toast('Camera deleted.');
+      render();
+    };
+    card.append(h('div', { style: 'overflow-x:auto' }, h('table', {},
+      h('tr', {}, ['Camera', 'Device', 'Last seen', 'Status', 'Footage', ''].map((x) => h('th', {}, x))),
+      car.cameras.map((c) => h('tr', { style: c.disconnected ? 'opacity:.75' : '' },
+        h('td', {}, c.label, c.disconnected ? h('span', { class: 'badge', style: 'margin-left:.4rem' }, 'Disconnected') : null),
+        h('td', { class: 'small' }, [c.deviceModel, c.appVersion].filter(Boolean).join(' · ')),
+        h('td', {}, ago(c.lastSeenAt)),
+        h('td', { class: 'small' }, c.disconnected ? 'Can’t upload any more'
+          : c.kind === 'dashcam' ? 'Imported over Wi-Fi or from its memory card'
+          : [c.recording ? 'Recording' : 'Idle', c.mode, c.battery != null ? `${c.battery}%${c.charging ? ' ⚡' : ''}` : null,
+            c.storageFree != null ? `${fmtBytes(c.storageFree)} free` : null].filter(Boolean).join(' · ')),
+        h('td', { class: 'small' }, c.clips ? `${c.clips} clip${c.clips === 1 ? '' : 's'} · ${fmtBytes(c.bytes)}` : 'None'),
+        h('td', {}, manage ? h('div', { class: 'row' },
+          h('button', { class: 'btn small', onclick: async () => { const l = prompt('Camera name', c.label); if (l) { await api('PATCH', `/api/cameras/${c.id}`, { label: l }); render(); } } }, 'Rename'),
+          c.kind === 'phone' && !c.disconnected ? h('button', { class: 'btn small danger', onclick: async () => {
+            if (!confirm(`Disconnect "${c.label}"? The phone stops uploading. Its ${c.clips} clips stay on the server, and it stays listed here until they’re gone (or you delete it).`)) return;
+            await api('DELETE', `/api/cameras/${c.id}`); render();
+          } }, 'Disconnect') : null,
+          c.disconnected || c.kind === 'dashcam' ? h('button', { class: 'btn small danger', onclick: () => purge(c) }, 'Delete with footage') : null) : null))))));
+    if (car.cameras.some((c) => c.disconnected)) {
+      card.append(h('p', { class: 'muted small' }, 'Disconnected phones stay listed while their footage is on the server, and disappear once it’s all deleted (by retention, by you, or with “Delete with footage”).'));
+    }
+  }
   if (manage) {
     card.append(h('button', { class: 'btn primary', onclick: async () => {
       const label = prompt('Name this camera (e.g. Front, Rear, Cabin)', car.cameras.length ? 'Rear' : 'Front');
@@ -1395,16 +1412,28 @@ function carCard(car) {
       return h('label', { class: 'row small' }, b, label);
     };
     const boxes = [folderBox('movie', 'Normal recordings'), folderBox('parking', 'Parking recordings'), folderBox('ro', 'Event (locked) recordings')];
+    const lensBox = (key, label) => {
+      const b = h('input', { type: 'checkbox', checked: (car.viofoLenses || ['F', 'R', 'I']).includes(key) });
+      b.dataset.lens = key;
+      return h('label', { class: 'row small' }, b, label);
+    };
+    const lenses = [lensBox('F', 'Front'), lensBox('R', 'Rear'), lensBox('I', 'Interior')];
+    const streamIn = h('input', { type: 'text', value: car.viofoStream || '', placeholder: 'rtsp://192.168.1.60/xxx.mov', style: 'width:260px' });
     const st = car.viofoStatus;
     const status = h('div', { class: 'small' }, st ? `${st.message} (${ago(st.at)})` : car.viofoUrl ? 'Not checked yet.' : '');
     card.append(h('h3', {}, 'Viofo dashcam'),
-      h('p', { class: 'muted small' }, 'Imports recordings from a Viofo dashcam whenever it’s on your Wi-Fi, with GPS, as clips of this car. The camera must be in Wi-Fi station mode (joined to your network) with a fixed address; keeping station mode on may need special firmware from Viofo support.'),
+      h('p', { class: 'muted small' }, 'Imports recordings from a Viofo dashcam whenever it’s on your Wi-Fi, with GPS, as clips of this car. Set the camera to Wi-Fi station mode (joined to your network) with a fixed address, and turn its parking mode off: Viofo cameras turn Wi-Fi off in parking mode. Camera Wi-Fi is slow (often 1–3 MB/s), so importing only the lenses you need helps; for a lot of footage, import from the memory card instead.'),
       h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'Camera address'), addr),
       h('div', { class: 'row' }, boxes),
+      h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'Lenses:'), lenses),
+      h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'Live stream (RTSP)'), streamIn),
+      h('div', { class: 'muted small' }, 'Used for Live view while the camera is on your network. Leave empty for the usual address (rtsp://camera/xxx.mov).'),
       h('div', { class: 'row' },
         h('button', { class: 'btn small', onclick: async () => {
           try {
-            await api('PATCH', `/api/cars/${car.id}`, { viofoUrl: addr.value.trim(), viofoFolders: boxes.map((l) => l.querySelector('input')).filter((b) => b.checked).map((b) => b.dataset.key) });
+            await api('PATCH', `/api/cars/${car.id}`, { viofoUrl: addr.value.trim(), viofoFolders: boxes.map((l) => l.querySelector('input')).filter((b) => b.checked).map((b) => b.dataset.key),
+              viofoLenses: lenses.map((l) => l.querySelector('input')).filter((b) => b.checked).map((b) => b.dataset.lens),
+              viofoStream: streamIn.value.trim() });
             toast(addr.value.trim() ? 'Saved. ODC checks the camera every 2 minutes.' : 'Viofo import turned off.');
           } catch (e) { toast(e.message); }
         } }, 'Save'),
@@ -1417,6 +1446,9 @@ function carCard(car) {
         } }, 'Check camera') : null),
       status);
   }
+
+  // Import from a memory card
+  if (manage) card.append(memoryCardImport(car));
 
   // Speed alert
   if (manage) {
@@ -1790,6 +1822,46 @@ function displayCard() {
     check('reduceMotion', 'Reduce motion (no animations)'));
 }
 
+/** Which alerts this person gets (browsers, the ODC app's Command Center, and their inbox). */
+function alertChoicesCard() {
+  const kinds = [['impact', 'Impacts'], ['arrived', 'Arrivals'], ['left', 'Departures'], ['speeding', 'Speeding'], ['offline', 'Camera went offline'],
+    ['overheating', 'Overheating'], ['battery_cutoff', 'Battery cutoff'], ['recording_stopped', 'Recording stopped'], ['mismatch', 'Cameras disagree'],
+    ['storage', 'Storage'], ['live_view', 'Someone watching live'], ['summary', 'Weekly summary']];
+  const cur = (state.me.prefs && state.me.prefs.alerts) || {};
+  const boxes = kinds.map(([k, label]) => {
+    const b = h('input', { type: 'checkbox', checked: cur[k] !== false, onchange: async () => {
+      const alerts = Object.fromEntries(kinds.map(([kk]) => [kk, boxes.find((x) => x.kind === kk).input.checked]));
+      try { state.me.prefs = (await api('PUT', '/api/me/prefs', { alerts })).data; } catch (e) { toast(e.message); }
+    } });
+    return { kind: k, input: b, el: h('label', { class: 'row small' }, b, label) };
+  });
+  return h('div', { class: 'card stack', style: 'max-width:640px;margin-top:1rem' }, h('h2', {}, 'Alerts I get'),
+    h('p', { class: 'muted small', style: 'margin:0' }, 'For your account: in this and other browsers, and in the ODC app’s Command Center. (ntfy, if set up, is shared by the whole server.)'),
+    h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:.2rem' }, boxes.map((b) => b.el)));
+}
+
+function summaryCard() {
+  const p = { weeklySummary: false, summaryDay: 0, summaryHour: 18, ...(state.me.prefs || {}) };
+  const save = async (patch) => {
+    Object.assign(p, patch);
+    try { state.me.prefs = (await api('PUT', '/api/me/prefs', patch)).data; } catch (e) { toast(e.message); }
+  };
+  const on = h('input', { type: 'checkbox', checked: p.weeklySummary, onchange: () => save({ weeklySummary: on.checked }) });
+  const day = h('select', { onchange: () => save({ summaryDay: Number(day.value) }) },
+    ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((d, i) => h('option', { value: i, selected: p.summaryDay === i }, d)));
+  const hour = h('select', { onchange: () => save({ summaryHour: Number(hour.value) }) },
+    Array.from({ length: 24 }, (_, i) => h('option', { value: i, selected: p.summaryHour === i }, new Date(2000, 0, 1, i).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))));
+  const preview = h('pre', { class: 'small', style: 'white-space:pre-wrap;margin:0;display:none' });
+  return h('div', { class: 'card stack', style: 'max-width:640px;margin-top:1rem' }, h('h2', {}, 'Weekly summary'),
+    h('p', { class: 'muted small', style: 'margin:0' }, 'A notification once a week with each of your cars’ trips, distance, driving time, alerts and footage. Sent to this account’s notifications (browser and ntfy).'),
+    h('label', { class: 'row' }, on, 'Send me a weekly summary'),
+    h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'Every'), day, h('span', { class: 'small muted' }, 'at'), hour),
+    h('div', { class: 'row' },
+      h('button', { class: 'btn small', onclick: async () => { const { data } = await api('GET', '/api/me/summary'); preview.textContent = data.message; preview.style.display = ''; } }, 'Preview'),
+      h('button', { class: 'btn small', onclick: async () => { await api('GET', '/api/me/summary?send=1'); toast('Summary sent to your notifications.'); } }, 'Send it now')),
+    preview);
+}
+
 async function devicesCard() {
   const card = h('div', { class: 'card stack', style: 'max-width:640px;margin-top:1rem' }, h('h2', {}, 'Signed-in devices'));
   const { data } = await api('GET', '/api/me/sessions');
@@ -1886,7 +1958,7 @@ async function liveViewDialog(carId, carName) {
       }
       const left = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
       const fresh = data.streams.some((st) => Date.now() - st.lastFrameAt < 6000);
-      status.textContent = !data.streams.length ? 'Waiting for the first picture…'
+      status.textContent = !data.streams.length ? (data.dashcamError ? `Dashcam stream: ${data.dashcamError}` : 'Waiting for the first picture…')
         : `${fresh ? '● Live' : 'Connection is slow…'} · ends in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} · ${fmtBytes(data.bytes)} so far`;
     } catch {
       clearInterval(timer);
@@ -1903,6 +1975,77 @@ async function liveViewDialog(carId, carName) {
   fpsSel.onchange = () => start();
   stopBtn.onclick = () => close();
   start();
+}
+
+/** Importing a dashcam's memory card: from the server's import folder, or uploaded from this computer. */
+function memoryCardImport(car) {
+  const box = h('div', { class: 'stack' });
+  const status = h('div', { class: 'stack' });
+  const keep = h('input', { type: 'checkbox' });
+  const runImport = async (folder) => {
+    try {
+      const { data } = await api('POST', `/api/cars/${car.id}/import`, { folder, keepFiles: keep.checked });
+      const bar = progressBar();
+      const step = h('span', { class: 'small' }, 'Starting…');
+      status.replaceChildren(step, bar);
+      const j = await waitForJob(data.jobId, (j) => { bar.set(j.progress); step.textContent = j.step; });
+      status.replaceChildren(h('span', { class: 'small' }, j.status === 'done'
+        ? `Done: ${j.result.imported} imported, ${j.result.skipped} already on the server${j.result.unrecognized ? `, ${j.result.unrecognized} not recognized (e.g. ${j.result.example})` : ''}.`
+        : `Import failed: ${j.error}`));
+      if (j.status === 'done') refresh();
+    } catch (e) { toast(e.message); }
+  };
+  const folderList = h('div', { class: 'stack' });
+  const refresh = async () => {
+    try {
+      const { data } = await api('GET', '/api/import');
+      folderList.replaceChildren(...(data.folders.length ? data.folders.map((f) => h('div', { class: 'row' },
+        h('span', { class: 'grow small' }, `${f.label} · ${f.files} videos · ${fmtBytes(f.bytes)}`),
+        h('button', { class: 'btn small', onclick: () => runImport(f.folder) }, 'Import into this car')))
+        : [h('span', { class: 'muted small' }, state.me.isAdmin ? `Nothing in ${data.path} yet.` : 'Upload files below.')]));
+    } catch { folderList.replaceChildren(); }
+  };
+  const picker = h('input', { type: 'file', multiple: true, webkitdirectory: true, style: 'display:none', onchange: () => upload([...picker.files]) });
+  const filesPicker = h('input', { type: 'file', multiple: true, accept: '.mp4,.MP4,.ts,.mov', style: 'display:none', onchange: () => upload([...filesPicker.files]) });
+  async function upload(files) {
+    files = files.filter((f) => /\.(mp4|ts|mov)$/i.test(f.name));
+    if (!files.length) return toast('No video files selected.');
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const batch = `upload-${state.me.id}-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+    const total = files.reduce((a, f) => a + f.size, 0);
+    const bar = progressBar();
+    const step = h('span', { class: 'small' });
+    status.replaceChildren(step, bar);
+    let sent = 0;
+    const t0 = Date.now();
+    for (const [i, f] of files.entries()) {
+      const { data } = await api('POST', '/api/import/uploads', { batch, relPath: f.webkitRelativePath || f.name, size: f.size });
+      for (let off = 0; off < f.size || off === 0;) {
+        const chunk = f.slice(off, off + 8 * 1024 * 1024);
+        const r = await fetch(`/api/import/uploads/${data.id}`, { method: 'PATCH', headers: { 'Upload-Offset': String(off) }, body: chunk });
+        if (!r.ok) { status.replaceChildren(h('span', { class: 'error small' }, `Upload failed at ${f.name}.`)); return; }
+        const j = await r.json();
+        sent += j.offset - off;
+        off = j.offset;
+        const mbps = sent / 1e6 / Math.max(0.5, (Date.now() - t0) / 1000);
+        step.textContent = `Uploading ${i + 1} of ${files.length}: ${f.name} · ${fmtBytes(sent)} of ${fmtBytes(total)} · ${mbps.toFixed(1)} MB/s`;
+        bar.set(sent / Math.max(1, total));
+        if (j.done || f.size === 0) break;
+      }
+    }
+    await runImport(batch);
+  }
+  box.append(h('h3', {}, 'Import from a memory card'),
+    h('p', { class: 'muted small', style: 'margin:0' }, 'The fastest way to bring in a lot of dashcam footage. Copy the card’s files into the server’s data/import folder (any folder layout works), or upload them from this computer. Recordings already on the server are skipped; event recordings arrive locked, parking ones marked.'),
+    folderList,
+    h('div', { class: 'row' },
+      h('button', { class: 'btn small', onclick: () => picker.click() }, 'Upload a folder…'),
+      h('button', { class: 'btn small', onclick: () => filesPicker.click() }, 'Upload files…'), picker, filesPicker),
+    h('label', { class: 'row small' }, keep, 'Keep the files in the import folder after importing (otherwise they’re moved, which is instant)'),
+    status);
+  refresh();
+  return box;
 }
 
 /** Polls a background job until it finishes; calls onUpdate with each status. */
@@ -1931,7 +2074,10 @@ function blurOptions() {
     plates.disabled = faces.disabled = !data.available;
     note.textContent = data.available
       ? 'Blurring is done on your server and can take a few minutes for long videos.'
-      : 'Blurring needs the optional ML container (see the server README).';
+      : data.reason === 'not-mounted'
+        ? 'Blurring is off: the ML container can’t see the footage. In docker-compose.yml, add “- ./data:/data” to the opendashcam-ml volumes, then run “docker compose --profile ml up -d”.'
+        : 'Blurring needs the optional ML container (see the server README).';
+    if (!data.available && data.reason === 'not-mounted') note.style.color = 'var(--warn)';
   }).catch(() => {});
   const box = h('div', { class: 'stack', style: 'gap:.2rem' },
     h('label', { class: 'row small' }, plates, 'Blur license plates'),
@@ -1972,7 +2118,13 @@ function shareForm(c, trim, video) {
       if (data.jobId) {
         const j = await waitForJob(data.jobId, (j) => { bar.set(j.progress); status.textContent = `${j.step}… the link works once this finishes.`; });
         bar.remove();
-        status.textContent = j.status === 'done' ? `Ready. Expires ${fmtDateTime(data.expiresAt)}.` : `Couldn’t prepare the video: ${j.error}`;
+        if (j.status === 'done' && (body.blurPlates || body.blurFaces)) {
+          status.replaceChildren(`Ready. Expires ${fmtDateTime(data.expiresAt)}. `,
+            h('a', { href: data.url, target: '_blank', rel: 'noopener' }, 'Preview'),
+            h('div', { class: 'small', style: 'color:var(--warn)' }, 'Watch it before sending: automatic blurring can miss plates and faces, especially small, distant or partly hidden ones. Turn the link off in Settings → Shared links if needed.'));
+        } else {
+          status.textContent = j.status === 'done' ? `Ready. Expires ${fmtDateTime(data.expiresAt)}.` : `Couldn’t prepare the video: ${j.error}`;
+        }
       }
     } catch (e) { toast(e.message); }
   }
@@ -2149,6 +2301,8 @@ async function pageSettings(main) {
       } }, 'Change password')));
 
   main.append(displayCard());
+  main.append(summaryCard());
+  main.append(alertChoicesCard());
   main.append(await twoFactorCard());
   main.append(await devicesCard());
   main.append(await sharedLinksCard());

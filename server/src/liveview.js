@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { config } from './config.js';
 import { EventEmitter } from 'node:events';
 import { audit } from './audit.js';
 import { notify } from './notify.js';
@@ -19,9 +21,55 @@ const sessions = new Map();  // id -> session
 const bus = new EventEmitter();
 bus.setMaxListeners(100);
 
+/**
+ * Dashcam live stream (e.g. a Viofo camera's RTSP) relayed into a live view session: ffmpeg reads the stream and
+ * writes JPEG pictures at the session's rate, which are shared with viewers like phone frames. Restarts if the
+ * stream drops while the session lasts.
+ */
+export const defaultStreamUrl = (car) => {
+  try { return `rtsp://${new URL(car.viofo_url).hostname}/xxx.mov`; } catch { return null; }
+};
+
+function startRelay(s, car) {
+  const url = car.viofo_stream || defaultStreamUrl(car);
+  if (!url || s.ended) return;
+  const key = `dashcam:${car.id}`;
+  const input = url.startsWith('rtsp') ? ['-rtsp_transport', 'tcp', '-timeout', '10000000'] : ['-re'];
+  const ff = spawn(config.ffmpeg, ['-v', 'error', ...input, '-i', url, '-an',
+    '-vf', `fps=${s.fps},scale='min(${s.maxWidth},iw)':-2`, '-f', 'image2pipe', '-c:v', 'mjpeg', '-q:v', '6', 'pipe:1'],
+  { stdio: ['ignore', 'pipe', 'pipe'] });
+  s.relays.add(ff);
+  let buf = Buffer.alloc(0);
+  let err = '';
+  ff.stdout.on('data', (d) => {
+    buf = Buffer.concat([buf, d]);
+    // Split the stream into JPEG pictures (start FFD8 ... end FFD9).
+    for (;;) {
+      const start = buf.indexOf(Buffer.from([0xff, 0xd8]));
+      if (start < 0) { buf = Buffer.alloc(0); return; }
+      const end = buf.indexOf(Buffer.from([0xff, 0xd9]), start + 2);
+      if (end < 0) { buf = buf.subarray(start); return; }
+      const jpeg = buf.subarray(start, end + 2);
+      buf = buf.subarray(end + 2);
+      s.frames.set(key, { jpeg: Buffer.from(jpeg), t: now(), label: 'Viofo dashcam' });
+      s.bytes += jpeg.length;
+      s.relayError = null;
+      bus.emit(`frame:${s.id}`, key);
+    }
+  });
+  ff.stderr.on('data', (d) => { err = (err + d).slice(-400); });
+  ff.on('close', () => {
+    s.relays.delete(ff);
+    if (s.ended) return;
+    s.relayError = err.trim().split('\n').pop() || 'The dashcam’s live stream stopped.';
+    setTimeout(() => startRelay(s, car), 5000); // try again while the session lasts
+  });
+}
+
 function endSession(s, reason = 'ended') {
   if (s.ended) return;
   s.ended = reason;
+  for (const ff of s.relays || []) ff.kill('SIGKILL');
   sessions.delete(s.id);
   bus.emit(`end:${s.id}`);
 }
@@ -97,13 +145,16 @@ export function registerLiveViewRoutes(router, app, { requireUser, requireCamera
     const fps = [0.5, 1, 2].includes(Number(b.fps)) ? Number(b.fps) : 1;
     const phones = [...(waiters.get(carId) || [])];
     const existing = [...sessions.values()].find((s) => s.carId === carId && s.userId === u.id);
-    if (!phones.length && !existing) {
+    const carRow = db.get('SELECT * FROM cars WHERE id = ?', carId);
+    const dashcam = !!carRow.viofo_url;
+    if (!phones.length && !existing && !dashcam) {
       throw new HttpError(409, 'No phone in this car is available for live view right now. Live view works while ODC is recording, with “Allow live view” turned on in the app.');
     }
     const s = existing || {
       id: crypto.randomUUID(), carId, userId: u.id, fps, maxWidth: 960, createdAt: now(), expiresAt: now() + SESSION_MS,
-      frames: new Map(), viewers: 0, lastViewerAt: now(), bytes: 0, ended: null,
+      frames: new Map(), viewers: 0, lastViewerAt: now(), bytes: 0, ended: null, relays: new Set(), relayError: null,
     };
+    if (!existing && dashcam) startRelay(s, carRow);
     s.fps = fps;
     sessions.set(s.id, s);
     // Wake the waiting phones.
@@ -116,17 +167,17 @@ export function registerLiveViewRoutes(router, app, { requireUser, requireCamera
     if (!existing) {
       audit(db, { user: u, action: 'live view started', target: car.name, ip: ctx.ip });
       if (car.owner_id !== u.id) {
-        notify(db, { title: `${u.username} is watching ${car.name} live`, message: 'Started from the ODC Server.', tags: ['eyes'], userIds: [car.owner_id], url: '/#/cars' });
+        notify(db, { title: `${u.username} is watching ${car.name} live`, message: 'Started from the ODC Server.', tags: ['eyes'], userIds: [car.owner_id], url: '/#/cars', kind: 'live_view', carId });
       }
     }
-    send(ctx.res, 201, { session: s.id, phones: phones.length, expiresAt: s.expiresAt });
+    send(ctx.res, 201, { session: s.id, phones: phones.length, dashcam, expiresAt: s.expiresAt });
   });
 
   router.add('GET', '/api/live-view/:id', (ctx) => {
     const u = requireUser(ctx);
     const s = sessionFor(u, ctx.params.id);
     send(ctx.res, 200, {
-      session: s.id, expiresAt: s.expiresAt, fps: s.fps, bytes: s.bytes,
+      session: s.id, expiresAt: s.expiresAt, fps: s.fps, bytes: s.bytes, dashcamError: s.relayError,
       streams: [...s.frames.entries()].map(([key, f]) => ({ key, label: f.label, lastFrameAt: f.t })),
     });
   });
@@ -182,6 +233,7 @@ export function registerLiveViewRoutes(router, app, { requireUser, requireCamera
     requireUser(ctx);
     const out = {};
     for (const [carId, set] of waiters) if (set.size) out[carId] = set.size;
+    for (const c of db.all("SELECT id FROM cars WHERE viofo_url IS NOT NULL AND viofo_url != ''")) out[c.id] ??= 'dashcam';
     send(ctx.res, 200, out);
   });
   void num;

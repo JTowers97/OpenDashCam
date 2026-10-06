@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { audit } from './audit.js';
-import { blurFile, mlBlurAvailable } from './blur.js';
+import { blurFile, blurStatus, mlBlurAvailable } from './blur.js';
 import { trimClip } from './media.js';
+import { stampAreaFor } from './plates.js';
 import { startJob } from './jobs.js';
 import { HttpError, now, randomToken, readJson, send } from './util.js';
 
@@ -39,7 +40,7 @@ export async function prepareCopy(db, clip, out, { start = null, end = null, blu
     }
     if (blurPlates || blurFaces) {
       progress(0.05, 'Blurring');
-      await blurFile(db, src === tmp ? tmp : clip.path, out, { plates: blurPlates, faces: blurFaces }, (p) => progress(0.05 + 0.95 * p, 'Blurring'));
+      await blurFile(db, src === tmp ? tmp : clip.path, out, { plates: blurPlates, faces: blurFaces, ignoreArea: stampAreaFor(db, clip) }, (p) => progress(0.05 + 0.95 * p, 'Blurring'));
     } else if (start == null) {
       fs.copyFileSync(clip.path, out);
     }
@@ -62,7 +63,7 @@ export function registerShareRoutes(router, app, { requireUser, clipFor }) {
 
   router.add('GET', '/api/blur/available', async (ctx) => {
     requireUser(ctx);
-    send(ctx.res, 200, { available: await mlBlurAvailable(db) });
+    send(ctx.res, 200, await blurStatus(db));
   });
 
   router.add('POST', '/api/clips/:id/share', async (ctx) => {
@@ -76,7 +77,10 @@ export function registerShareRoutes(router, app, { requireUser, clipFor }) {
     const blurPlates = !!b.blurPlates;
     const blurFaces = !!b.blurFaces;
     if ((blurPlates || blurFaces) && !(await mlBlurAvailable(db))) {
-      throw new HttpError(400, 'Blurring needs the ML container (smart search) running and reachable.');
+      const st = await blurStatus(db);
+      throw new HttpError(400, st.reason === 'not-mounted'
+        ? 'Blurring needs the ML container to see the footage: add “- ./data:/data” to its volumes in docker-compose.yml (see the server README).'
+        : 'Blurring needs the ML container (smart search) running and reachable.');
     }
     const token = randomToken(24);
     const needsCopy = trim || blurPlates || blurFaces;

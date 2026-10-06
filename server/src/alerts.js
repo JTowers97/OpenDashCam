@@ -54,7 +54,7 @@ function checkPlaces(db, carId, points) {
       if (inside === was) continue;
       placeState.set(key, inside);
       const type = inside ? 'arrived' : 'left';
-      db.run('INSERT INTO events(car_id, camera_id, type, t, data) VALUES (?, NULL, ?, ?, ?)', carId, type, p.t,
+      const ev = db.run('INSERT INTO events(car_id, camera_id, type, t, data) VALUES (?, NULL, ?, ?, ?)', carId, type, p.t,
         JSON.stringify({ place: place.name, placeId: place.id, lat: p.lat, lon: p.lon }));
       if ((inside && place.on_arrive) || (!inside && place.on_leave)) {
         notify(db, {
@@ -63,6 +63,7 @@ function checkPlaces(db, carId, points) {
           tags: [inside ? 'round_pushpin' : 'checkered_flag'],
           userIds: [place.user_id],
           url: '/#/map',
+          kind: type, eventId: Number(ev.lastInsertRowid), carId,
         });
       }
     }
@@ -88,7 +89,7 @@ function checkSpeed(db, carId, points) {
       if (!st.alerted && p.t - st.overSince >= 10_000 && p.t - st.lastAlert > 10 * 60_000) {
         st.alerted = true;
         st.lastAlert = p.t;
-        db.run('INSERT INTO events(car_id, camera_id, type, t, data) VALUES (?, NULL, ?, ?, ?)', carId, 'speeding', p.t,
+        const ev = db.run('INSERT INTO events(car_id, camera_id, type, t, data) VALUES (?, NULL, ?, ?, ?)', carId, 'speeding', p.t,
           JSON.stringify({ speedKmh: Math.round(v), limitKmh: limit, lat: p.lat, lon: p.lon }));
         notify(db, {
           title: `${car.name}: over ${fmtSpeed(units, limit)}`,
@@ -97,6 +98,7 @@ function checkSpeed(db, carId, points) {
           priority: 4,
           carId,
           url: '/#/map',
+          kind: 'speeding', eventId: Number(ev.lastInsertRowid),
         });
       }
     } else {

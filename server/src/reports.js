@@ -64,7 +64,9 @@ export function registerReportRoutes(router, app, { requireUser }) {
     const after = Math.min(600, Math.max(5, Number(b.afterS) || 60));
     if (!t) throw new HttpError(400, 'Choose the moment of the incident.');
     const blur = { blurPlates: !!b.blurPlates, blurFaces: !!b.blurFaces };
-    if ((blur.blurPlates || blur.blurFaces) && !(await mlBlurAvailable(db))) throw new HttpError(400, 'Blurring needs the ML container (smart search) running and reachable.');
+    if ((blur.blurPlates || blur.blurFaces) && !(await mlBlurAvailable(db))) {
+      throw new HttpError(400, 'Blurring isn’t available. Check Settings → Shared links, or the server README (the ML container needs the data folder mounted).');
+    }
     const mph = b.units === 'mph';
     const note = String(b.note || '').slice(0, 4000);
     const car = db.get('SELECT * FROM cars WHERE id = ?', carId);

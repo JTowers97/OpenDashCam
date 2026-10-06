@@ -41,6 +41,10 @@ built-in database; an optional second container adds smart search.
   2 minutes unless extended (up to 15), and end when nobody is watching. The phone shows a notification while
   being watched; owners are notified when someone else starts a live view; only owners and managers can use it,
   and every live view is in the activity log
+- **Weekly summary** (optional, per person, Settings → Weekly summary): each car's trips, distance, driving time,
+  alerts and footage, sent at the day and time you choose
+- **Dashcam live view:** a Viofo camera on your network appears in Live view next to any phones in the car (its RTSP
+  stream; set the address under the car's Viofo dashcam settings if it differs from `rtsp://camera/xxx.mov`)
 - **Plates in a clip:** with license plate reading on, the clip player's **Plates** button lists the plates read
   in that clip, with a cropped image and the moment each appears (click to jump there)
 - **Arrival alerts:** mark places on the Map (Alert places) and get a notification when a car arrives or
@@ -171,6 +175,22 @@ specific date range or car first, retry clips that failed, or analyze clips agai
 needs about 1.5 GB of RAM. Without a GPU, analysis
 takes roughly a second or two per minute of footage on a typical home server; searching is instant.
 
+## Command Center in the app
+
+The ODC app can sign in to your server (Settings → Command Center) to manage it from your everyday phone and get
+its alerts. The phone shows in Settings → Signed-in devices, where it can be signed out. Each person chooses which
+alerts they get (Settings → Alerts I get, in the web app or the app).
+
+Alerts reach the app in one of two ways (Command Center settings → Delivery):
+- **UnifiedPush** (recommended): through a free distributor app such as **ntfy** (Google Play or F-Droid). Instant
+  and battery-friendly, without Google services. The server sends each alert encrypted for that phone.
+- **Direct connection:** the app keeps its own connection to your server, with a quiet notification. Works with
+  nothing else installed; uses a little more battery.
+
+Tapping an impact alert opens it with its photo and plays the clip from that moment, once the clip is on the server
+(turn on "Upload impact and locked clips over cellular" on the dashcam phone to have it there within minutes).
+In-app playback needs the server's main address to use a regular HTTPS certificate (or http).
+
 ## Home Assistant (optional)
 
 ODC can publish each car to Home Assistant over MQTT. Cars appear automatically (MQTT discovery) as
@@ -215,11 +235,13 @@ interior) becomes a camera of the car, event (RO) recordings arrive locked, park
 parking, and the GPS recorded in the video is used for the map, trips, place names and alerts, like phone
 footage.
 
-Requirements:
-- A Viofo dashcam with Wi-Fi **station mode** (it joins your home Wi-Fi). Keeping station mode on
-  automatically may need special firmware from Viofo support
-- A fixed address for the camera on your network (a DHCP reservation in your router)
-- Power while parked (for example a hardwire kit), so the camera is on when it's in range
+Recommended setup:
+- Set the camera up with Viofo's app, then switch it to Wi-Fi **station mode** (it joins your home Wi-Fi)
+- Give the camera a fixed address on your network (a DHCP reservation in your router)
+- **Turn the camera's parking mode off.** Viofo cameras turn Wi-Fi off in parking mode, so with parking mode on,
+  importing only works while the car is running (or with special firmware from Viofo support)
+- Choose only the lenses and folders you need (Cars → the car → Viofo dashcam). Camera Wi-Fi is slow, often
+  1–3 MB/s, and slower at the edge of your Wi-Fi's range; the status shows the actual speed
 
 Setup: on the Cars page, open the car, enter the camera's address under **Viofo dashcam**, choose which
 recordings to import, save, and use **Check camera**. ODC then checks every 2 minutes and imports new
@@ -230,6 +252,26 @@ GPS is read with ExifTool (included in the Docker image). The camera's own file 
 video contains GPS, ODC uses GPS time instead. Tested against Viofo's documented Wi-Fi interface; models and
 firmware vary, so check the first imports.
 
+## Importing a dashcam's memory card
+
+For a lot of footage, the memory card is much faster than Wi-Fi. Two ways:
+- **Copy the card's files into `data/import`** on the server (any folder layout, for example the card's whole
+  `DCIM` folder), then on the Cars page open the car and choose **Import into this car** under
+  **Import from a memory card** (admins).
+- **Upload from a computer:** in the same place, **Upload a folder…** or **Upload files…** (anyone who can
+  manage the car).
+
+Recordings are added like Wi-Fi imports: GPS from the video, event (`RO`) recordings locked, parking recordings
+marked, one camera per lens. Anything already on the server is skipped, including recordings imported over Wi-Fi,
+and Wi-Fi import won't download what a card import brought in. Imported files are moved out of `data/import`,
+which is instant, unless you choose to keep them.
+
+## Removing cameras
+
+**Disconnect** stops a phone from uploading. Its footage stays on the server, and the camera stays listed (marked
+Disconnected) until that footage is gone, then disappears. **Delete with footage** removes a disconnected phone
+or a dashcam's camera and all its clips right away. GPS history and trips are kept either way.
+
 ## Blurring plates and faces (optional)
 
 Share links and incident reports can blur license plates and faces. This runs in the ML container (the
@@ -237,7 +279,18 @@ same one as smart search), which needs access to the footage: keep the `./data:/
 `volumes` in `docker-compose.yml`. Faces are found with YuNet (OpenCV), downloaded on first use; plates
 with the same detector as plate search. Blurring re-encodes the video and takes roughly as long as the
 clip on a typical home server. Detection isn't perfect: check the result before sharing anything
-sensitive.
+sensitive (the share panel offers a preview).
+
+To find small, distant plates, the plate detector also searches overlapping full-resolution tiles of each frame,
+and faces are searched at full resolution plus a magnified view of the middle of the picture. That's thorough but
+CPU-heavy. These settings in the ML container's `environment` trade thoroughness for speed:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `ODC_BLUR_DETECT_FPS` | `10` | Detections per second of video (lower is faster; regions stay covered between detections) |
+| `ODC_BLUR_PLATE_MODEL` | `yolo-v9-s-608-license-plate-end2end` | Plate detection model (`yolo-v9-t-384-license-plate-end2end` is faster, finds fewer small plates) |
+| `ODC_BLUR_PLATE_CONF` | `0.25` | Plate detection threshold (lower finds more, with more harmless false alarms) |
+| `ODC_BLUR_FACE_CONF` | `0.5` | Face detection threshold |
 
 ## License plates (optional)
 
@@ -257,6 +310,9 @@ Laws on reading, storing and logging license plates differ between countries, st
 is legal in some places, a grey area in others and illegal in others. You are responsible for knowing
 and following the laws where you drive and where your server runs. Both switches show a notice before
 they turn on.
+
+The date/time stamp burned into the video can look like a plate, so plates are neither read nor blurred where it
+is: the bottom-left corner on footage from ODC phones with the stamp on, and the bottom strip on Viofo footage.
 
 Plate reading uses [fast-alpr](https://github.com/ankandrew/fast-alpr); accuracy depends heavily on the
 footage: night, motion blur and distance make plates hard to read.

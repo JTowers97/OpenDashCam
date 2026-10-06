@@ -77,7 +77,7 @@ export function registerDeviceRoutes(router, app) {
        WHERE id = ?`,
       num(b.battery), bool(b.charging), num(b.thermal), storageFree, bool(b.recording), str(b.mode, 20), str(b.appVersion, 60), cam.id);
     if (storageFree != null && storageFree < 1024 ** 3 && (cam.storage_free == null || cam.storage_free >= 1024 ** 3)) {
-      notify(db, { title: `${cam.car_name} · ${cam.label}: phone storage low`, message: 'Less than 1 GB free on the phone.', tags: ['floppy_disk'], carId: cam.car_id });
+      notify(db, { title: `${cam.car_name} · ${cam.label}: phone storage low`, message: 'Less than 1 GB free on the phone.', tags: ['floppy_disk'], carId: cam.car_id, kind: 'storage' });
     }
     send(ctx.res, 200, { ok: true, now: now() });
   });
@@ -133,7 +133,7 @@ export function registerDeviceRoutes(router, app) {
     notify(db, {
       title: `${cam.car_name} · ${cam.label}: ${titles[type] || type}`,
       message: message || 'See the photo.',
-      tags: ['rotating_light'], priority: type === 'impact' ? 5 : 4, carId: cam.car_id, image,
+      tags: ['rotating_light'], priority: type === 'impact' ? 5 : 4, carId: cam.car_id, image, kind: type, eventId: id,
     });
     send(ctx.res, 201, { id });
   });
@@ -144,7 +144,7 @@ export function registerDeviceRoutes(router, app) {
     const b = await readJson(ctx.req);
     const type = str(b.type, 30) || 'event';
     const t = num(b.t) ?? now();
-    db.run('INSERT INTO events(car_id, camera_id, type, t, data) VALUES (?, ?, ?, ?, ?)',
+    const ev = db.run('INSERT INTO events(car_id, camera_id, type, t, data) VALUES (?, ?, ?, ?, ?)',
       cam.car_id, cam.id, type, t, JSON.stringify({ ...(b.data && typeof b.data === 'object' ? b.data : {}), ...(b.message ? { message: str(b.message, 300) } : {}) }));
     const titles = {
       impact: 'Impact detected',
@@ -159,6 +159,7 @@ export function registerDeviceRoutes(router, app) {
         priority: type === 'impact' ? 5 : 4,
         carId: cam.car_id,
         tags: [type === 'impact' ? 'rotating_light' : 'warning'],
+        kind: type, eventId: Number(ev.lastInsertRowid),
       });
     }
     send(ctx.res, 200, { ok: true });
@@ -188,6 +189,7 @@ export function registerDeviceRoutes(router, app) {
       codec: str(b.codec, 20), width: num(b.width), height: num(b.height), fps: num(b.fps),
       mode: str(b.mode, 30), locked: Boolean(b.locked), lockReason: str(b.lockReason, 20),
       encrypted: Boolean(b.encrypted) || fileName.endsWith('.odcenc'),
+      stamp: b.stamp === undefined ? null : Boolean(b.stamp),
     };
     const id = uuid();
     fs.mkdirSync(config.uploadsDir, { recursive: true });
@@ -261,10 +263,11 @@ export function registerDeviceRoutes(router, app) {
     db.tx(() => {
       db.run(
         `INSERT INTO clips(id, camera_id, car_id, stream, file_name, path, started_at, duration_ms, size, sha256, codec, width, height, fps,
-           mode, locked, lock_reason, encrypted, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           mode, locked, lock_reason, encrypted, created_at, stamp)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         up.id, cam.id, cam.car_id, meta.stream, meta.fileName, dest, meta.startedAt, meta.durationMs, size, actual,
-        meta.codec, meta.width, meta.height, meta.fps, meta.mode, bool(meta.locked), meta.lockReason, bool(meta.encrypted), now());
+        meta.codec, meta.width, meta.height, meta.fps, meta.mode, bool(meta.locked), meta.lockReason, bool(meta.encrypted), now(),
+        meta.stamp == null ? null : meta.stamp ? 1 : 0);
       db.run('DELETE FROM uploads WHERE id = ?', up.id);
     });
     app.onClipAdded(up.id);

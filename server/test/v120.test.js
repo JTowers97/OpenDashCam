@@ -115,6 +115,23 @@ try {
   ok(`shared copy is trimmed (${Number(info.format.duration).toFixed(1)} s) and re-encoded after blurring`);
   assert.match(await (await fetch(`${base}/s/${tok3}`)).text(), /License plates blurred and faces blurred/); ok('page says what was blurred');
 
+  // An ML container that runs but can't see the footage (data folder not mounted)
+  const http = await import('node:http');
+  const blind = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(req.url.startsWith('/health') ? { ok: true, blur: true } : req.url.startsWith('/can-read') ? { readable: false } : {}));
+  });
+  await new Promise((rr) => blind.listen(0, '127.0.0.1', rr));
+  await web('PUT', '/api/settings', { mlUrl: `http://127.0.0.1:${blind.address().port}` });
+  r = await web('GET', '/api/blur/available');
+  assert.deepEqual([r.data.available, r.data.reason], [false, 'not-mounted']); ok('detects an ML container that can’t see the footage');
+  r = await web('POST', `/api/clips/${front.id}/share`, { blurFaces: true });
+  assert.equal(r.status, 400); assert.match(r.data.error, /\.\/data:\/data/); ok('…and explains the fix instead of failing later');
+  blind.close();
+  await web('PUT', '/api/settings', { mlUrl: `http://127.0.0.1:${mlPort}` });
+  r = await web('GET', '/api/blur/available');
+  assert.equal(r.data.available, true); ok('the real ML container (data folder visible) passes the check');
+
   await web('PUT', '/api/settings', { mlUrl: 'http://127.0.0.1:9' });
   r = await web('POST', `/api/clips/${front.id}/share`, { blurPlates: true });
   assert.equal(r.status, 400); ok('blurring refused clearly when the ML container is unreachable');

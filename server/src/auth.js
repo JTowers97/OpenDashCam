@@ -30,12 +30,13 @@ export function validatePassword(pw) {
   if (typeof pw !== 'string' || pw.length < 8) throw new HttpError(400, 'Passwords need at least 8 characters.');
 }
 
-export function createSession(db, userId, ctx = null) {
+/** A sign-in. App sign-ins (Command Center) last a year and show the phone's name in Signed-in devices. */
+export function createSession(db, userId, ctx = null, { app = false, deviceName = null } = {}) {
   const token = randomToken();
   const t = now();
+  const label = app ? `ODC app${deviceName ? ` on ${String(deviceName).slice(0, 80)}` : ''}` : ctx ? String(ctx.req.headers['user-agent'] || '').slice(0, 300) : null;
   db.run('INSERT INTO sessions(token_hash, user_id, created_at, expires_at, user_agent, ip, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    sha256hex(token), userId, t, t + SESSION_DAYS * 86400_000,
-    ctx ? String(ctx.req.headers['user-agent'] || '').slice(0, 300) : null, ctx?.ip ?? null, t);
+    sha256hex(token), userId, t, t + (app ? 365 : SESSION_DAYS) * 86400_000, label, ctx?.ip ?? null, t);
   return token;
 }
 
@@ -43,7 +44,7 @@ export function createSession(db, userId, ctx = null) {
 export const sessionId = (tokenHash) => tokenHash.slice(0, 16);
 
 export function currentSessionHash(req) {
-  const token = parseCookies(req)[SESSION_COOKIE];
+  const token = sessionToken(req);
   return token ? sha256hex(token) : null;
 }
 
@@ -57,8 +58,14 @@ export function clearCookie() {
   return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`;
 }
 
+/** The session token: the browser's cookie, or the app's "Authorization: Bearer" header. */
+export function sessionToken(req) {
+  const auth = req.headers.authorization || '';
+  return auth.startsWith('Bearer ') ? auth.slice(7).trim() : parseCookies(req)[SESSION_COOKIE];
+}
+
 export function userFromRequest(db, req) {
-  const token = parseCookies(req)[SESSION_COOKIE];
+  const token = sessionToken(req);
   if (!token) return null;
   const hash = sha256hex(token);
   const row = db.get(
@@ -70,7 +77,7 @@ export function userFromRequest(db, req) {
 }
 
 export function destroySession(db, req) {
-  const token = parseCookies(req)[SESSION_COOKIE];
+  const token = sessionToken(req);
   if (token) db.run('DELETE FROM sessions WHERE token_hash = ?', sha256hex(token));
 }
 

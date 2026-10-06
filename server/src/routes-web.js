@@ -25,6 +25,9 @@ import { snapshotPath } from './snapshots.js';
 import { haStatus } from './homeassistant.js';
 import { importCar, listFiles } from './viofo.js';
 import { registerLiveViewRoutes } from './liveview.js';
+import { registerImportRoutes } from './sdimport.js';
+import { buildSummary } from './summary.js';
+import { ALERT_KINDS, notify, waitForNotification } from './notify.js';
 import { requireCamera } from './routes-device.js';
 import { indexerState, indexStats, mlHealth, resetIndex, runIndexer, visualSearch } from './search.js';
 import {
@@ -89,6 +92,12 @@ export function registerWebRoutes(router, app) {
         throw new HttpError(401, 'That code is wrong or expired.', { totpRequired: true });
       }
     }
+    if (b.app) {
+      // Command Center in the ODC app: a year-long sign-in, returned to the app instead of a cookie.
+      const token = createSession(db, user.id, ctx, { app: true, deviceName: b.deviceName });
+      audit(db, { user: { id: user.id, username: user.username }, action: 'sign-in', ip: ctx.ip, detail: `ODC app${b.deviceName ? ` on ${String(b.deviceName).slice(0, 80)}` : ''}` });
+      return send(ctx.res, 200, { ok: true, token, user: { id: user.id, username: user.username, isAdmin: user.is_admin === 1 } });
+    }
     const token = createSession(db, user.id, ctx);
     audit(db, { user: { id: user.id, username: user.username }, action: 'sign-in', ip: ctx.ip, detail: String(ctx.req.headers['user-agent'] || '').slice(0, 200) });
     send(ctx.res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(token, secure(ctx)) });
@@ -107,10 +116,85 @@ export function registerWebRoutes(router, app) {
     send(ctx.res, 200, { ...u, totpEnabled: !!row.totp_enabled, prefs: safeJson(row.prefs) || {}, settings: publicSettings(getSettings(db)), version: config.version });
   });
 
+  // ---------------------------------------------------------------- the app's notification inbox
+
+  const notificationView = (n, base) => ({
+    id: n.id, t: n.t, kind: n.kind, title: n.title, body: n.body, carId: n.car_id, eventId: n.event_id, read: !!n.read,
+    // Photos through the signed-in API (the push copy carries a signed link instead).
+    imageUrl: n.event_id && n.image ? `${base}/api/snapshots/${n.event_id}` : null,
+  });
+
+  router.add('GET', '/api/me/notifications', (ctx) => {
+    const u = requireUser(ctx);
+    const after = Number(ctx.query.get('after')) || 0;
+    const limit = Math.min(200, Number(ctx.query.get('limit')) || 50);
+    const rows = after
+      ? db.all('SELECT * FROM notifications WHERE user_id = ? AND id > ? ORDER BY id LIMIT ?', u.id, after, limit)
+      : db.all('SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT ?', u.id, limit).reverse();
+    const base = app.publicUrl(ctx.req);
+    send(ctx.res, 200, { notifications: rows.map((n) => notificationView(n, base)), unread: db.get('SELECT COUNT(*) n FROM notifications WHERE user_id = ? AND read = 0', u.id).n });
+  });
+
+  /** The app's direct connection: answers as soon as there's a notification after `after`, or with nothing after ~25 s. */
+  router.add('GET', '/api/me/notifications/wait', (ctx) => {
+    const u = requireUser(ctx);
+    const after = Number(ctx.query.get('after')) || 0;
+    const base = app.publicUrl(ctx.req);
+    const answer = () => {
+      const rows = db.all('SELECT * FROM notifications WHERE user_id = ? AND id > ? ORDER BY id LIMIT 50', u.id, after);
+      if (!ctx.res.writableEnded) send(ctx.res, 200, { notifications: rows.map((n) => notificationView(n, base)) });
+    };
+    if (db.get('SELECT 1 FROM notifications WHERE user_id = ? AND id > ?', u.id, after)) return answer();
+    const cancel = waitForNotification(u.id, Number(process.env.ODC_NOTIFY_WAIT_MS) || 25_000, () => answer());
+    ctx.res.on('close', cancel);
+  });
+
+  router.add('POST', '/api/me/notifications/read', async (ctx) => {
+    const u = requireUser(ctx);
+    const b = await readJson(ctx.req);
+    if (b.all) db.run('UPDATE notifications SET read = 1 WHERE user_id = ?', u.id);
+    else for (const id of (Array.isArray(b.ids) ? b.ids : []).slice(0, 500)) db.run('UPDATE notifications SET read = 1 WHERE user_id = ? AND id = ?', u.id, Number(id));
+    send(ctx.res, 200, { ok: true });
+  });
+
+  /** A test alert to this person: shows in their inbox, apps and browsers. */
+  router.add('POST', '/api/me/notifications/test', async (ctx) => {
+    const u = requireUser(ctx);
+    await notify(db, { title: 'Open Dash Cam test alert', message: 'Alerts from your ODC Server arrive here.', userIds: [u.id], kind: 'test' });
+    send(ctx.res, 200, { ok: true });
+  });
+
+  /** From an alert to its footage: the clip covering the event's moment (its own camera first), and where in it. */
+  router.add('GET', '/api/events/:id/clip', (ctx) => {
+    const u = requireUser(ctx);
+    const ev = db.get('SELECT * FROM events WHERE id = ?', Number(ctx.params.id));
+    if (!ev || !carRole(db, u, ev.car_id)) throw new HttpError(404, 'Event not found');
+    const covering = db.all(`SELECT c.*, m.label AS camera_label FROM clips c JOIN cameras m ON m.id = c.camera_id
+      WHERE c.car_id = ? AND c.started_at <= ? AND c.started_at + COALESCE(c.duration_ms, 180000) >= ? ORDER BY (c.camera_id = ?) DESC, c.started_at DESC`,
+    ev.car_id, ev.t, ev.t, ev.camera_id || '');
+    const data = safeJson(ev.data) || {};
+    const base = app.publicUrl(ctx.req);
+    send(ctx.res, 200, {
+      eventId: ev.id, type: ev.type, t: ev.t, carId: ev.car_id, data,
+      snapshotUrl: data.snapshot ? `${base}/api/snapshots/${ev.id}` : null,
+      clips: covering.map((c) => ({ clipId: c.id, camera: c.camera_label, offsetMs: Math.max(0, ev.t - c.started_at), encrypted: !!c.encrypted,
+        streamUrl: c.encrypted ? null : `${base}/api/clips/${c.id}/stream?st=${streamToken(db, c.id)}` })),
+    });
+  });
+
+  /** Preview of this person's weekly summary (also sends it now with ?send=1). */
+  router.add('GET', '/api/me/summary', (ctx) => {
+    const u = requireUser(ctx);
+    const s = buildSummary(db, u.id);
+    if (ctx.query.get('send') === '1') notify(db, { title: s.title, message: s.message, tags: ['bar_chart'], userIds: [u.id], url: '/#/trips', priority: 2, kind: 'summary' });
+    send(ctx.res, 200, s);
+  });
+
   /** Display preferences, per person (follow them to any browser). */
   router.add('PUT', '/api/me/prefs', async (ctx) => {
     const u = requireUser(ctx);
-    const b = await readJson(ctx.req);
+    // Merge with what's saved, so each settings card only sends its own choices.
+    const b = { ...(safeJson(db.get('SELECT prefs FROM users WHERE id = ?', u.id)?.prefs) || {}), ...(await readJson(ctx.req)) };
     const pick = (v, allowed, def) => (allowed.includes(v) ? v : def);
     const prefs = {
       theme: pick(b.theme, ['dark', 'light', 'system'], 'dark'),
@@ -118,6 +202,11 @@ export function registerWebRoutes(router, app) {
       textSize: pick(Number(b.textSize), [100, 115, 130], 100),
       highContrast: !!b.highContrast,
       reduceMotion: !!b.reduceMotion,
+      weeklySummary: !!b.weeklySummary,
+      // Which alerts this person gets (in the app, browsers and their inbox); everything is on unless turned off.
+      alerts: Object.fromEntries(ALERT_KINDS.map((k) => [k, b.alerts?.[k] !== false])),
+      summaryDay: Math.min(6, Math.max(0, Math.round(Number(b.summaryDay ?? 0)) || 0)),
+      summaryHour: Math.min(23, Math.max(0, Math.round(Number(b.summaryHour ?? 18)) || 0)),
     };
     db.run('UPDATE users SET prefs = ? WHERE id = ?', JSON.stringify(prefs), u.id);
     send(ctx.res, 200, prefs);
@@ -285,7 +374,6 @@ export function registerWebRoutes(router, app) {
 
   router.add('POST', '/api/settings/test-ntfy', async (ctx) => {
     requireAdmin(ctx);
-    const { notify } = await import('./notify.js');
     const ok = await notify(db, { title: 'Open Dash Cam test', message: 'Alerts from your ODC server will arrive here.', tags: ['white_check_mark'] });
     send(ctx.res, ok ? 200 : 502, { ok, error: ok ? undefined : 'Could not reach the ntfy URL.' });
   });
@@ -370,11 +458,19 @@ export function registerWebRoutes(router, app) {
   // ---------------------------------------------------------------- cars, cameras, sharing, pairing
 
   const carView = (car, user) => {
-    const cameras = db.all('SELECT * FROM cameras WHERE car_id = ? ORDER BY created_at', car.id).map((c) => ({
-      id: c.id, label: c.label, deviceModel: c.device_model, appVersion: c.app_version, lastSeenAt: c.last_seen_at,
-      battery: c.battery, charging: !!c.charging, thermal: c.thermal, storageFree: c.storage_free,
-      recording: !!c.recording, mode: c.mode,
-    }));
+    const cameras = db.all(`SELECT c.*, (SELECT COUNT(*) FROM clips k WHERE k.camera_id = c.id) AS clip_count,
+        (SELECT COALESCE(SUM(size), 0) FROM clips k WHERE k.camera_id = c.id) AS clip_bytes
+      FROM cameras c WHERE c.car_id = ? ORDER BY c.created_at`, car.id)
+      .map((c) => ({
+        id: c.id, label: c.label, deviceModel: c.device_model, appVersion: c.app_version, lastSeenAt: c.last_seen_at,
+        battery: c.battery, charging: !!c.charging, thermal: c.thermal, storageFree: c.storage_free,
+        recording: !!c.recording, mode: c.mode,
+        kind: c.token_hash.startsWith('viofo:') ? 'dashcam' : 'phone',
+        disconnected: c.token_hash.startsWith('revoked:'),
+        clips: c.clip_count, bytes: c.clip_bytes,
+      }))
+      // A disconnected phone stays listed only while it still has footage on the server.
+      .filter((c) => !(c.disconnected && c.clips === 0));
     const shares = db.all('SELECT s.user_id AS userId, u.username, s.role FROM car_shares s JOIN users u ON u.id = s.user_id WHERE s.car_id = ?', car.id);
     const stats = db.get('SELECT COUNT(*) n, COALESCE(SUM(size), 0) bytes, MAX(started_at) last FROM clips WHERE car_id = ?', car.id);
     const owner = db.get('SELECT username FROM users WHERE id = ?', car.owner_id);
@@ -383,6 +479,7 @@ export function registerWebRoutes(router, app) {
       mismatchPolicy: car.mismatch_policy, truthCameraId: car.truth_camera_id,
       retentionDays: car.retention_days, storageCapGb: car.storage_cap_gb, speedAlertKmh: car.speed_alert_kmh,
       viofoUrl: car.viofo_url || null, viofoFolders: (car.viofo_folders || 'movie,parking,ro').split(','), viofoStatus: safeJson(car.viofo_status),
+      viofoLenses: (car.viofo_lenses || 'F,R,I').split(','), viofoStream: car.viofo_stream || null,
       cameras, shares, clipCount: stats.n, clipBytes: stats.bytes, lastClipAt: stats.last,
       live: carLive(db, car),
     };
@@ -422,6 +519,15 @@ export function registerWebRoutes(router, app) {
       if (v) { try { new URL(v); } catch { throw new HttpError(400, 'Enter the camera’s address, e.g. 192.168.1.60'); } }
       db.run('UPDATE cars SET viofo_url = ?, viofo_status = NULL WHERE id = ?', v || null, id);
       audit(db, { user: u, action: v ? 'Viofo import set up' : 'Viofo import turned off', target: db.get('SELECT name FROM cars WHERE id = ?', id)?.name, ip: ctx.ip, detail: v || null });
+    }
+    if (b.viofoStream !== undefined) {
+      const v = String(b.viofoStream || '').trim();
+      if (v && !/^(rtsp|rtsps|http|https):\/\//i.test(v)) throw new HttpError(400, 'The live stream address should start with rtsp://');
+      db.run('UPDATE cars SET viofo_stream = ? WHERE id = ?', v || null, id);
+    }
+    if (b.viofoLenses !== undefined) {
+      const l = (Array.isArray(b.viofoLenses) ? b.viofoLenses : []).filter((x) => ['F', 'R', 'I'].includes(x));
+      db.run('UPDATE cars SET viofo_lenses = ? WHERE id = ?', (l.length ? l : ['F', 'R', 'I']).join(','), id);
     }
     if (b.viofoFolders !== undefined) {
       const f = (Array.isArray(b.viofoFolders) ? b.viofoFolders : []).filter((x) => ['movie', 'parking', 'ro'].includes(x));
@@ -521,10 +627,22 @@ export function registerWebRoutes(router, app) {
     send(ctx.res, 200, { ok: true });
   });
 
-  /** Unpairs the phone. Its footage stays on the server. */
+  /**
+   * Without ?purge=1: disconnects the phone (it can't upload any more); its footage stays, and it stays listed until
+   * that footage is gone. With ?purge=1: deletes the camera and all its footage (GPS history and trips are kept).
+   */
   router.add('DELETE', '/api/cameras/:id', (ctx) => {
     const u = requireUser(ctx);
     const cam = cameraWithRole(u, ctx.params.id, true);
+    if (ctx.query.get('purge') === '1') {
+      const clips = db.all('SELECT id, path FROM clips WHERE camera_id = ?', cam.id);
+      for (const c of clips) app.deleteClipFiles(c);
+      db.run('DELETE FROM clips WHERE camera_id = ?', cam.id);
+      db.run('DELETE FROM live WHERE camera_id = ?', cam.id);
+      db.run('DELETE FROM cameras WHERE id = ?', cam.id);
+      audit(db, { user: u, action: 'camera deleted with its footage', target: cam.label, ip: ctx.ip, detail: `${clips.length} clips` });
+      return send(ctx.res, 200, { ok: true, deletedClips: clips.length });
+    }
     db.run('UPDATE cameras SET token_hash = ? WHERE id = ?', 'revoked:' + cam.id + ':' + now(), cam.id);
     audit(db, { user: u, action: 'phone disconnected', target: cam.label, ip: ctx.ip });
     db.run('DELETE FROM live WHERE camera_id = ?', cam.id);
@@ -972,6 +1090,7 @@ export function registerWebRoutes(router, app) {
 
   // ---------------------------------------------------------------- live view
   registerLiveViewRoutes(router, app, { requireUser, requireCamera, carRole });
+  registerImportRoutes(router, app, { requireUser, requireCarRole });
 
   // ---------------------------------------------------------------- plates in one clip
 
@@ -1034,9 +1153,9 @@ export function registerWebRoutes(router, app) {
     const endpoint = String(b.endpoint || '');
     if (!/^https:\/\//.test(endpoint) && !/^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(endpoint)) throw new HttpError(400, 'Invalid push endpoint');
     if (!b.keys?.p256dh || !b.keys?.auth) throw new HttpError(400, 'Missing subscription keys');
-    db.run(`INSERT INTO push_subs(endpoint, user_id, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`,
-      endpoint, u.id, String(b.keys.p256dh), String(b.keys.auth), now());
+    db.run(`INSERT INTO push_subs(endpoint, user_id, p256dh, auth, created_at, kind, label) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth, kind = excluded.kind, label = excluded.label`,
+      endpoint, u.id, String(b.keys.p256dh), String(b.keys.auth), now(), b.kind === 'app' ? 'app' : 'browser', b.label ? String(b.label).slice(0, 80) : null);
     send(ctx.res, 200, { ok: true });
   });
 

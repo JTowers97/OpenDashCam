@@ -263,6 +263,23 @@ CREATE TABLE IF NOT EXISTS viofo_files (
   PRIMARY KEY (car_id, path)
 );
 
+-- Each person's notifications (their inbox in the app; also delivered by push and the app's direct connection).
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  t INTEGER NOT NULL,
+  kind TEXT NOT NULL,          -- impact, arrived, left, speeding, offline, overheating, battery_cutoff, recording_stopped,
+                               -- mismatch, storage, live_view, summary, test
+  title TEXT NOT NULL,
+  body TEXT,
+  car_id INTEGER,
+  event_id INTEGER,
+  image TEXT,
+  url TEXT,
+  read INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, id);
+
 CREATE TABLE IF NOT EXISTS recovery_codes (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   code_hash TEXT NOT NULL,
@@ -287,11 +304,16 @@ const COLUMNS = [
   ['users', 'quota_gb', 'REAL'],                // null = no per-person limit (cars they own)
   ['sessions', 'user_agent', 'TEXT'],
   ['clips', 'trimmed_from', 'TEXT'],
-  ['users', 'prefs', 'TEXT'],                 // JSON: display preferences (theme, accent, text size, contrast, motion)
+  ['clips', 'stamp', 'INTEGER'],              // date/time stamp burned in: 1 yes, 0 no, null unknown (older uploads)
+  ['users', 'prefs', 'TEXT'],
+  ['push_subs', 'kind', "TEXT NOT NULL DEFAULT 'browser'"],   // browser | app
+  ['push_subs', 'label', 'TEXT'],                 // JSON: display preferences (theme, accent, text size, contrast, motion)
   ['cars', 'speed_alert_kmh', 'REAL'],        // null = no speed alert
   ['cars', 'viofo_url', 'TEXT'],              // Viofo dashcam address on the home network, e.g. http://192.168.1.60
   ['cars', 'viofo_folders', 'TEXT'],          // which folders to import: movie,parking,ro
-  ['cars', 'viofo_status', 'TEXT'],           // JSON: last check result          // id of the clip a trimmed copy was cut from
+  ['cars', 'viofo_status', 'TEXT'],           // JSON: last check result
+  ['cars', 'viofo_lenses', 'TEXT'],           // which lenses to import over Wi-Fi: F,R,I
+  ['cars', 'viofo_stream', 'TEXT'],           // live stream address (RTSP); default rtsp://<camera>/xxx.mov          // id of the clip a trimmed copy was cut from
   ['sessions', 'ip', 'TEXT'],
   ['sessions', 'last_used_at', 'INTEGER'],
 ];

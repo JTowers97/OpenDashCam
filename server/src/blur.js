@@ -1,27 +1,48 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { config } from './config.js';
 import { getSettings } from './db.js';
 
 /**
  * Plate/face blurring is done by the optional ML container, which reads and writes the same /data folder.
  * Returns when the blurred file has been written.
  */
-export async function mlBlurAvailable(db) {
+/** Whether blurring can work: { available, reason }. Checks the ML container can actually read this server's files. */
+export async function blurStatus(db) {
   const s = getSettings(db);
-  if (!s.mlUrl) return false;
+  if (!s.mlUrl) return { available: false, reason: 'no-ml' };
+  const base = s.mlUrl.replace(/\/$/, '');
   try {
-    const r = await fetch(`${s.mlUrl.replace(/\/$/, '')}/health`, { signal: AbortSignal.timeout(3000) });
-    return r.ok && (await r.json()).blur === true;
+    const r = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3000) });
+    if (!r.ok || (await r.json()).blur !== true) return { available: false, reason: 'no-ml' };
   } catch {
-    return false;
+    return { available: false, reason: 'no-ml' };
+  }
+  // Write a small file into the data folder and ask the ML container whether it can see it.
+  const probe = path.join(config.cacheDir, 'ml-probe.txt');
+  try {
+    fs.mkdirSync(path.dirname(probe), { recursive: true });
+    fs.writeFileSync(probe, 'ODC');
+    const r = await fetch(`${base}/can-read?path=${encodeURIComponent(probe)}`, { signal: AbortSignal.timeout(3000) });
+    if (r.status === 404) return { available: true, reason: null }; // older ML container: can't check, assume OK
+    const j = await r.json();
+    return j.readable ? { available: true, reason: null } : { available: false, reason: 'not-mounted', dataDir: config.dataDir };
+  } catch {
+    return { available: false, reason: 'no-ml' };
   }
 }
 
-export async function blurFile(db, input, output, { plates, faces }, onProgress = () => {}) {
+export async function mlBlurAvailable(db) {
+  return (await blurStatus(db)).available;
+}
+
+export async function blurFile(db, input, output, { plates, faces, ignoreArea = 'none' }, onProgress = () => {}) {
   const base = getSettings(db).mlUrl.replace(/\/$/, '');
   const id = crypto.randomUUID();
   const r = await fetch(`${base}/blur`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id, input, output, plates: !!plates, faces: !!faces }),
+    body: JSON.stringify({ id, input, output, plates: !!plates, faces: !!faces, ignoreArea }),
     signal: AbortSignal.timeout(10_000),
   });
   if (!r.ok) throw new Error(`Blurring isn't available: ${(await r.json().catch(() => ({}))).error || r.status}`);

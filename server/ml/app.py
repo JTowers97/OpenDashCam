@@ -60,10 +60,19 @@ class FakePlates:
     """Reports plate "RED 123" in mostly-red images. Only for automated tests."""
 
     def read(self, img):
-        r, g, b = np.asarray(img.convert("RGB"), dtype=np.float32).reshape(-1, 3).mean(0)
-        if r > 150 and g < 100 and b < 100:
-            return [{"text": "RED123", "confidence": 0.93, "box": [10, 10, 90, 40]}]
-        return []
+        a = np.asarray(img.convert("RGB"), dtype=np.int16)
+        red = (a[:, :, 0] > 150) & (a[:, :, 1] < 100) & (a[:, :, 2] < 100)
+        if red.mean() < 0.02:
+            return []
+        # One reading per separate red area, at its real position (like a real detector reporting each plate).
+        import cv2
+        n, _, stats, _ = cv2.connectedComponentsWithStats(red.astype(np.uint8))
+        out = []
+        for i in range(1, n):
+            x, y, w, h, area = (int(v) for v in stats[i])
+            if area >= 50:
+                out.append({"text": "RED123", "confidence": 0.93, "box": [x, y, x + w, y + h]})
+        return out
 
 
 class AlprModel:
@@ -165,6 +174,12 @@ class Handler(BaseHTTPRequestHandler):
                                     "dim": getattr(m, "dim", None), "error": state["error"],
                                     "plates": {"loaded": state["plates"] is not None, "error": state["plates_error"]},
                                     "blur": True})
+        if self.path.startswith("/can-read?"):
+            # Lets the ODC server check that its data folder is mounted here (needed for blurring).
+            from urllib.parse import parse_qs, urlparse
+            p = parse_qs(urlparse(self.path).query).get("path", [""])[0]
+            ok = p.startswith(("/", "C:")) and os.path.isfile(p)
+            return self._send(200, {"readable": ok})
         if self.path.startswith("/blur/"):
             job = blur_jobs.get(self.path[len("/blur/"):])
             return self._send(200 if job else 404, job or {"error": "unknown job"})
@@ -178,7 +193,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not os.path.isfile(src):
                     return self._send(400, {"error": f"input not found: {src} (is the data folder mounted in the ML container?)"})
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
-                blur_jobs.submit(str(b["id"]), src, dst, bool(b.get("plates")), bool(b.get("faces")))
+                blur_jobs.submit(str(b["id"]), src, dst, bool(b.get("plates")), bool(b.get("faces")), str(b.get("ignoreArea") or "none"))
             except Exception as e:  # noqa: BLE001
                 return self._send(400, {"error": f"{type(e).__name__}: {e}"})
             return self._send(200, {"ok": True})
@@ -196,7 +211,7 @@ class Handler(BaseHTTPRequestHandler):
                     plates = pm.read(img)
             except Exception as e:  # noqa: BLE001
                 return self._send(500, {"error": f"{type(e).__name__}: {e}"})
-            return self._send(200, {"plates": plates})
+            return self._send(200, {"plates": plates, "width": img.size[0], "height": img.size[1]})
         m = state["model"]
         if m is None:
             return self._send(503, {"error": state["error"] or "model is still loading"})

@@ -315,7 +315,7 @@ function checkMismatch(db, carId) {
   mismatchState.set(carId, state);
   if (t - state.since >= s.mismatchSustainSec * 1000 && t - state.alertedAt > 5 * 60_000) {
     state.alertedAt = t;
-    db.run('INSERT INTO events(car_id, camera_id, type, t, data) VALUES (?, NULL, ?, ?, ?)',
+    const ev = db.run('INSERT INTO events(car_id, camera_id, type, t, data) VALUES (?, NULL, ?, ?, ?)',
       carId, 'mismatch', t, JSON.stringify(worst));
     const car = db.get('SELECT name FROM cars WHERE id = ?', carId);
     notify(db, {
@@ -323,6 +323,7 @@ function checkMismatch(db, carId) {
       message: `Two cameras report positions ${fmtDist(s.units, worst.distance)} apart and speeds ${fmtSpeedKmh(s.units, worst.speedDiffKmh)} apart.`,
       tags: ['warning'],
       carId,
+      kind: 'mismatch', eventId: Number(ev.lastInsertRowid),
     });
   }
 }

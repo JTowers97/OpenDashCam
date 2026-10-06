@@ -1,5 +1,52 @@
 # Changelog
 
+## App 1.8.1 · Server 1.8.1
+- **Fixed:** the date/time stamp was sometimes read as a license plate, and blurred when blurring plates. Plates are no
+  longer read or blurred where a clip's stamp is: the bottom-left corner on ODC phone footage with the stamp on (also
+  assumed for clips uploaded before this version), the bottom strip on Viofo footage. Readings of stamps already in
+  the plate log are removed when the server updates
+- **App:** tells the server whether the date/time stamp is on when uploading a clip
+
+## App 1.8.0 · Server 1.8.0
+- **App:** Command Center (first part): sign in to your ODC Server (two-factor supported) to see your cars and alerts,
+  and get alerts as notifications with their photo; tapping one opens the alert and plays the clip from that moment.
+  Dashcam Mode stays the default; Command Center can be made the default. Protected by the app lock
+- **App:** alert delivery without Google services: UnifiedPush (through a distributor app such as ntfy) or a direct
+  connection to the server; choose which alerts you get; send a test alert
+- **Server:** app sign-ins (a year, listed in Signed-in devices), a notification inbox per person, the app's direct
+  connection, alert choices per person (also in the web app: Settings → Alerts I get), and finding the clip for an alert
+
+## App 1.7.0 · Server 1.7.0
+- **App:** optional spoken feedback ("Recording started", "Parking mode", "Impact detected", battery and heat pauses),
+  played like navigation directions so it comes through the car's speakers and briefly lowers music
+- **App:** optional upload of impact and locked clips over mobile data while other backups wait for Wi-Fi: right after an
+  impact, again as the locked clips finish, and when you lock a clip (counts toward the monthly mobile data limit)
+- **Server:** optional weekly summary per person: each car's trips, distance, driving time, alerts and footage, at a
+  chosen day and time, with a preview
+- **Server:** live view of a Viofo dashcam on your network, next to any phones in the car (its RTSP stream, relayed while
+  someone is watching; shows why if the stream can't be reached)
+- **Server:** saving one set of preferences no longer resets the others
+
+## Server 1.6.1 (app 1.6.1: no changes, version aligned)
+- **Improved (server):** plate and face blurring finds far more: plates are also searched in overlapping
+  full-resolution tiles with a larger model and a lower threshold, faces at full resolution plus a magnified view of
+  the middle of the picture; detection runs 10 times a second and each region stays covered across neighboring
+  detections; blurred areas are larger. Adjustable for speed (see the server README). Blurred share links offer a
+  preview with a reminder to check before sending
+- **Server:** import a dashcam's memory card: copy its files into `data/import` or upload them from the browser,
+  then import into a car (GPS, event recordings locked, parking marked, one camera per lens; anything already on
+  the server skipped, including across Wi-Fi and card imports)
+- **Server:** Viofo Wi-Fi import shows progress and transfer speed, and can be limited to chosen lenses; the docs
+  recommend turning the camera's parking mode off (Viofo turns Wi-Fi off in parking mode)
+- **Server:** cameras on the Cars page show their footage; disconnected phones are marked and disappear once their
+  footage is gone; "Delete with footage" removes a disconnected phone or a dashcam camera with its clips (GPS
+  history and trips are kept)
+- **Improved (server):** Viofo import accepts more file name styles (falling back to the time the camera reports for
+  each file), and the status says why nothing was imported (no recordings, unreadable names, or the newest recording
+  waiting until the camera starts the next one)
+- **Fixed (server):** blurring could be offered when the ML container couldn't see the footage (its data folder not
+  mounted), and then fail. The server now checks this, and the blur options explain how to fix it
+
 ## App 1.6.0 · Server 1.6.0
 - **App:** optional app lock (fingerprint, face or screen lock) for clips, maps, the parking spot and settings,
   relocking after a chosen time; the recording screen is never locked

@@ -31,10 +31,13 @@ try {
   await a('POST', '/api/setup', { username: 'admin', password: 'correct horse' });
   let r = await a('GET', '/api/me');
   assert.deepEqual(r.data.prefs, {}); ok('no preferences until chosen (defaults apply)');
+  const pick = (o) => ({ theme: o.theme, accent: o.accent, textSize: o.textSize, highContrast: o.highContrast, reduceMotion: o.reduceMotion });
   r = await a('PUT', '/api/me/prefs', { theme: 'light', accent: 'teal', textSize: 130, highContrast: true, reduceMotion: true });
-  assert.deepEqual(r.data, { theme: 'light', accent: 'teal', textSize: 130, highContrast: true, reduceMotion: true }); ok('preferences saved');
+  assert.deepEqual(pick(r.data), { theme: 'light', accent: 'teal', textSize: 130, highContrast: true, reduceMotion: true }); ok('preferences saved');
   r = await a('PUT', '/api/me/prefs', { theme: 'neon', accent: '<script>', textSize: 999 });
-  assert.deepEqual(r.data, { theme: 'dark', accent: 'orange', textSize: 100, highContrast: false, reduceMotion: false }); ok('invalid values fall back to defaults');
+  assert.deepEqual(pick(r.data), { theme: 'dark', accent: 'orange', textSize: 100, highContrast: true, reduceMotion: true }); ok('invalid values fall back to defaults; other choices are kept');
+  r = await a('PUT', '/api/me/prefs', { weeklySummary: true });
+  assert.equal(r.data.weeklySummary, true); assert.equal(r.data.highContrast, true); ok('saving one setting doesn’t reset the others');
   await a('PUT', '/api/me/prefs', { theme: 'system', accent: 'purple', textSize: 115 });
   const b = client();
   await a('POST', '/api/users', { username: 'sam', password: 'password123' });

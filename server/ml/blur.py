@@ -24,7 +24,11 @@ YUNET_URL = os.environ.get(
     "ODC_FACE_MODEL_URL",
     "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
 )
-DETECT_FPS = float(os.environ.get("ODC_BLUR_DETECT_FPS", "6"))
+DETECT_FPS = float(os.environ.get("ODC_BLUR_DETECT_FPS", "10"))
+# Blurring favors finding everything over avoiding false alarms: blurring a sign by mistake is harmless, a missed plate isn't.
+PLATE_MODEL = os.environ.get("ODC_BLUR_PLATE_MODEL", "yolo-v9-s-608-license-plate-end2end")
+PLATE_CONF = float(os.environ.get("ODC_BLUR_PLATE_CONF", "0.25"))
+FACE_CONF = float(os.environ.get("ODC_BLUR_FACE_CONF", "0.5"))
 
 
 class FakeDetector:
@@ -36,26 +40,103 @@ class FakeDetector:
     def boxes(self, frame):
         b, g, r = frame[:, :, 0].astype(int), frame[:, :, 1].astype(int), frame[:, :, 2].astype(int)
         mask = (r > 200) & (g < 60) & (b < 60) if self.channel == "red" else (g > 200) & (r < 60) & (b < 60)
-        ys, xs = np.nonzero(mask)
-        if len(xs) < 20:
-            return []
-        cx, cy = int(xs.mean()), int(ys.mean())
-        return [(cx - 40, cy - 25, cx + 40, cy + 25)]
+        import cv2
+        n, _, stats, cents = cv2.connectedComponentsWithStats(mask.astype(np.uint8))
+        out = []
+        for i in range(1, n):  # one box per separate marker, centered on it
+            if stats[i][4] < 20:
+                continue
+            cx, cy = int(cents[i][0]), int(cents[i][1])
+            out.append((cx - 40, cy - 25, cx + 40, cy + 25))
+        return out
+
+
+def in_ignored_area(box, w, h, area):
+    """True if the box's center is in the date/time stamp area (where a plate is never legible)."""
+    if area not in ("bottom-left", "bottom"):
+        return False
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    return cy > h * 0.84 and (area == "bottom" or cx < w * 0.5)
+
+
+class SkipArea:
+    """Wraps a detector and drops what it finds in the stamp area."""
+
+    def __init__(self, detector, area):
+        self.detector, self.area = detector, area
+
+    def boxes(self, frame):
+        h, w = frame.shape[:2]
+        return [b for b in self.detector.boxes(frame) if not in_ignored_area(b, w, h, self.area)]
+
+
+def iou(a, b):
+    ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0
+
+
+def merge(boxes, thresh=0.3):
+    """Combines overlapping boxes (the same object found in two tiles) into one box covering both."""
+    out = []
+    for b in sorted(boxes, key=lambda x: (x[2] - x[0]) * (x[3] - x[1]), reverse=True):
+        for i, o in enumerate(out):
+            if iou(b, o) > thresh or (b[0] >= o[0] and b[1] >= o[1] and b[2] <= o[2] and b[3] <= o[3]):
+                out[i] = (min(b[0], o[0]), min(b[1], o[1]), max(b[2], o[2]), max(b[3], o[3]))
+                break
+        else:
+            out.append(b)
+    return out
+
+
+def tiled(detect, frame, cols=3, rows=2, overlap=0.25):
+    """
+    Runs a detector on the whole frame and on overlapping full-resolution tiles. Detectors look at a shrunken copy
+    of their input, so small, distant plates are only found in tiles.
+    """
+    h, w = frame.shape[:2]
+    found = list(detect(frame))
+    tw, th = int(w / cols * (1 + overlap)), int(h / rows * (1 + overlap))
+    for r in range(rows):
+        for c in range(cols):
+            x0 = min(max(0, int(c * w / cols - (tw - w / cols) / 2)), w - tw) if cols > 1 else 0
+            y0 = min(max(0, int(r * h / rows - (th - h / rows) / 2)), h - th) if rows > 1 else 0
+            tile = frame[y0:y0 + th, x0:x0 + tw]
+            for (x1, y1, x2, y2) in detect(tile):
+                found.append((x1 + x0, y1 + y0, x2 + x0, y2 + y0))
+    return merge(found)
 
 
 class PlateDetector:
-    def __init__(self, alpr_model):
-        self.alpr = alpr_model.alpr
+    """License plates, tuned for blurring: a larger model, a lower confidence bar, and full-resolution tiles."""
 
-    def boxes(self, frame):
-        det = getattr(self.alpr, "detector", None)
-        results = det.predict(frame) if det is not None else [r.detection for r in self.alpr.predict(frame)]
+    def __init__(self, alpr_model):
+        self.detector = None
+        try:
+            from open_image_models import LicensePlateDetector
+
+            self.detector = LicensePlateDetector(detection_model=PLATE_MODEL, conf_thresh=PLATE_CONF)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Blur plate detector %s unavailable (%s); using the plate search detector", PLATE_MODEL, e)
+            self.alpr = alpr_model.alpr
+
+    def _detect(self, img):
+        if self.detector is not None:
+            results = self.detector.predict(img)
+        else:
+            det = getattr(self.alpr, "detector", None)
+            results = det.predict(img) if det is not None else [r.detection for r in self.alpr.predict(img)]
         out = []
         for r in results:
             bb = getattr(r, "bounding_box", None)
             if bb is not None:
                 out.append((int(bb.x1), int(bb.y1), int(bb.x2), int(bb.y2)))
         return out
+
+    def boxes(self, frame):
+        return tiled(self._detect, frame)
 
 
 class FaceDetector:
@@ -69,19 +150,22 @@ class FaceDetector:
             urllib.request.urlretrieve(YUNET_URL, path + ".tmp")
             os.replace(path + ".tmp", path)
         self.cv2 = cv2
-        self.net = cv2.FaceDetectorYN.create(path, "", (320, 320), 0.6, 0.3, 5000)
+        self.net = cv2.FaceDetectorYN.create(path, "", (320, 320), FACE_CONF, 0.3, 5000)
 
     def boxes(self, frame):
+        # Full resolution (faces in dashcam footage are small), plus a 2x upscaled pass over the middle of the
+        # picture, where pedestrians and other drivers usually are, so even tiny faces are found.
         h, w = frame.shape[:2]
-        scale = min(1.0, 960 / max(w, h))  # detect on a smaller copy for speed
-        small = frame if scale == 1.0 else self.cv2.resize(frame, (int(w * scale), int(h * scale)))
-        self.net.setInputSize((small.shape[1], small.shape[0]))
-        _, faces = self.net.detect(small)
-        out = []
+        self.net.setInputSize((w, h))
+        _, faces = self.net.detect(frame)
+        out = [(int(f[0]), int(f[1]), int(f[0] + f[2]), int(f[1] + f[3])) for f in (faces if faces is not None else [])]
+        y0, y1, x0, x1 = h // 4, h * 3 // 4, w // 6, w * 5 // 6
+        mid = self.cv2.resize(frame[y0:y1, x0:x1], ((x1 - x0) * 2, (y1 - y0) * 2), interpolation=self.cv2.INTER_LINEAR)
+        self.net.setInputSize((mid.shape[1], mid.shape[0]))
+        _, faces = self.net.detect(mid)
         for f in faces if faces is not None else []:
-            x, y, fw, fh = (float(v) / scale for v in f[:4])
-            out.append((int(x), int(y), int(x + fw), int(y + fh)))
-        return out
+            out.append((int(f[0] / 2 + x0), int(f[1] / 2 + y0), int((f[0] + f[2]) / 2 + x0), int((f[1] + f[3]) / 2 + y0)))
+        return merge(out)
 
 
 def pixelate(frame, box, pad):
@@ -135,6 +219,7 @@ def blur_video(src, dst, detectors, progress=lambda p: None):
     every = max(1, round(fps / DETECT_FPS))
     buffered = []       # frames since the last detection, waiting for the next one
     prev_boxes = []     # [(box, pad)] from the previous detection
+    prev2_boxes = []    # ...and the one before (so a single missed detection doesn't leave a gap)
     regions = 0
     idx = 0
 
@@ -160,17 +245,18 @@ def blur_video(src, dst, detectors, progress=lambda p: None):
             frame = np.frombuffer(raw, np.uint8).reshape(h, w, 3).copy()
             if idx % every == 0:
                 boxes = detect(frame)
-                # Frames between two detections get the regions from both, so moving objects stay covered.
-                flush(buffered, prev_boxes + boxes)
+                # Frames between detections get the regions from the detections around them (two before, one after),
+                # so moving objects stay covered and one missed detection doesn't leave a visible gap.
+                flush(buffered, prev2_boxes + prev_boxes + boxes)
                 buffered = []
-                flush([frame], prev_boxes + boxes)
-                prev_boxes = boxes
+                flush([frame], prev2_boxes + prev_boxes + boxes)
+                prev2_boxes, prev_boxes = prev_boxes, boxes
             else:
                 buffered.append(frame)
             idx += 1
             if total and idx % 15 == 0:
                 progress(min(0.99, idx / total))
-        flush(buffered, prev_boxes)
+        flush(buffered, prev2_boxes + prev_boxes)
         enc.stdin.close()
         err = enc.stderr.read().decode(errors="replace")
         if enc.wait() != 0:
@@ -197,33 +283,33 @@ class BlurJobs:
         self.faces = None
         threading.Thread(target=self._run, daemon=True).start()
 
-    def submit(self, job_id, src, dst, plates, faces):
+    def submit(self, job_id, src, dst, plates, faces, ignore_area="none"):
         with self.lock:
             self.jobs[job_id] = {"status": "queued", "progress": 0.0, "error": None, "regions": 0}
-            self.queue.append((job_id, src, dst, plates, faces))
+            self.queue.append((job_id, src, dst, plates, faces, ignore_area))
             self.cv.notify()
 
     def get(self, job_id):
         with self.lock:
             return dict(self.jobs.get(job_id) or {})
 
-    def _detectors(self, plates, faces):
+    def _detectors(self, plates, faces, ignore_area="none"):
         dets = []
         if plates:
             if self.fake:
-                dets.append((FakeDetector("red"), 0.15))
+                dets.append((SkipArea(FakeDetector("red"), ignore_area), 0.15))
             else:
                 pm = self.plate_model_fn()
                 if pm is None:
                     raise RuntimeError("license plate models unavailable")
-                dets.append((PlateDetector(pm), 0.25))
+                dets.append((SkipArea(PlateDetector(pm), ignore_area), 0.35))
         if faces:
             if self.fake:
                 dets.append((FakeDetector("green"), 0.15))
             else:
                 if self.faces is None:
                     self.faces = FaceDetector()
-                dets.append((self.faces, 0.3))
+                dets.append((self.faces, 0.45))
         return dets
 
     def _run(self):
@@ -231,14 +317,14 @@ class BlurJobs:
             with self.lock:
                 while not self.queue:
                     self.cv.wait()
-                job_id, src, dst, plates, faces = self.queue.pop(0)
+                job_id, src, dst, plates, faces, ignore_area = self.queue.pop(0)
                 self.jobs[job_id]["status"] = "running"
 
             def prog(p, j=job_id):
                 with self.lock:
                     self.jobs[j]["progress"] = round(p, 3)
             try:
-                regions = blur_video(src, dst, self._detectors(plates, faces), prog)
+                regions = blur_video(src, dst, self._detectors(plates, faces, ignore_area), prog)
                 with self.lock:
                     self.jobs[job_id].update(status="done", progress=1.0, regions=regions)
             except Exception as e:  # noqa: BLE001

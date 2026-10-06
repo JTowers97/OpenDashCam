@@ -12,7 +12,7 @@ import { JobQueue, h264Path, makeThumbnail, probe, thumbPath, transcodeH264 } fr
 import { learnPlaces, rebuildDirtyTrips, relabelTrips } from './tracks.js';
 import { loadGeocoder, placeName } from './geocode.js';
 import { forgetClip, runIndexer } from './search.js';
-import { purgeOldPlates, runPlateIndexer } from './plates.js';
+import { purgeOldPlates, purgeStampReadings, runPlateIndexer } from './plates.js';
 import { loadTls } from './tls.js';
 import { httpsRedirect, securityHeaders } from './headers.js';
 import { maybeBackup } from './backup.js';
@@ -21,12 +21,20 @@ import { deleteShareFiles, purgeExpiredShares } from './shares.js';
 import { cleanReports } from './reports.js';
 import { haShutdown, haTick } from './homeassistant.js';
 import { viofoTick } from './viofo.js';
+import { maybeSendSummaries } from './summary.js';
+import { purgeNotifications } from './notify.js';
 import { notify } from './notify.js';
 
 for (const d of [config.dataDir, config.libraryDir, config.uploadsDir, config.cacheDir]) fs.mkdirSync(d, { recursive: true });
 
 const db = openDb(config.dbPath);
 const tls = loadTls(config.dataDir);
+// Readings of the date/time stamp logged before the stamp area was skipped: removed once.
+if (getMeta(db, 'stamp_readings_cleaned_v2') !== '1') {
+  const n = purgeStampReadings(db);
+  setMeta(db, 'stamp_readings_cleaned_v2', '1');
+  if (n) console.log(`Removed ${n} license plate readings of the date/time stamp.`);
+}
 const jobs = new JobQueue(1);        // thumbnails and probing
 const transcodes = new JobQueue(1);  // H.264 conversions
 
@@ -119,7 +127,7 @@ function enforceRetention() {
       notify(db, {
         title: `${u.username}: storage limit almost reached`,
         message: `Footage uses ${(after / 1024 ** 3).toFixed(1)} of ${u.quota_gb} GB. The oldest unlocked clips are being removed.`,
-        tags: ['floppy_disk'], carId: car?.id ?? null,
+        tags: ['floppy_disk'], carId: car?.id ?? null, kind: 'storage',
       });
     }
   }
@@ -135,7 +143,7 @@ function enforceRetention() {
       notify(db, {
         title: 'ODC server storage almost full',
         message: `Footage uses ${(after / 1024 ** 3).toFixed(1)} of ${s.storageCapGb} GB. The oldest unlocked clips are being removed.`,
-        tags: ['floppy_disk'],
+        tags: ['floppy_disk'], kind: 'storage',
       });
     }
   }
@@ -164,6 +172,7 @@ function checkOffline() {
       message: `No contact for ${s.offlineAlertMin} minutes while it was recording.`,
       tags: ['electric_plug'],
       carId: c.car_id,
+      kind: 'offline',
     });
   }
 }
@@ -221,6 +230,8 @@ every(Number(process.env.ODC_HA_INTERVAL_MS) || 5000, () => { try { haTick(db); 
 every(3600_000, () => {
   purgeAudit(db, getSettings(db).auditRetentionDays);
   purgeExpiredShares(db);
+  maybeSendSummaries(db);
+  purgeNotifications(db);
   cleanReports();
   const b = maybeBackup(db, config.dataDir);
   if (b) console.log('Database backup written:', b);

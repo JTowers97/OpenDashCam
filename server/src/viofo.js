@@ -29,13 +29,30 @@ async function get(url, ms = 8000) {
   return r.text();
 }
 
-/** Parses a Viofo file name: 2024_0715_093012_000123F.MP4 (camera local time; F/R/I = lens). */
-export function parseName(name) {
-  const m = /^(\d{4})_(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})(?:_\d+)?([FRI])?\.(mp4|ts)$/i.exec(name);
-  if (!m) return null;
-  const [, y, mo, d, h, mi, s, lens] = m;
-  return { time: new Date(+y, +mo - 1, +d, +h, +mi, +s).getTime(), lens: (lens || 'F').toUpperCase() };
+/**
+ * Parses a dashcam file name (camera local time; F/R/I = front/rear/interior lens). Accepts the common styles:
+ * 2024_0715_093012_000123F.MP4, 20240715_093012_0123F.MP4, 20240715093012_000123F.MP4, 2024_0715_093012_F.MP4.
+ * If the name has no recognizable date, the time the camera reports for the file (`fallbackTime`) is used.
+ */
+export function parseName(name, fallbackTime = null) {
+  if (!/\.(mp4|ts|mov)$/i.test(name)) return null;
+  const lensM = /(?:^|[_-])?([FRI])(?:[_-]?\d*)?\.(mp4|ts|mov)$/i.exec(name);
+  const lens = (lensM?.[1] || 'F').toUpperCase();
+  const m = /(\d{4})[_-]?(\d{2})(\d{2})[_-]?(\d{2})(\d{2})(\d{2})/.exec(name);
+  if (m) {
+    const [, y, mo, d, h, mi, s] = m;
+    const t = new Date(+y, +mo - 1, +d, +h, +mi, +s).getTime();
+    if (+y >= 2010 && +mo >= 1 && +mo <= 12 && Number.isFinite(t)) return { time: t, lens };
+  }
+  if (fallbackTime && /\.(mp4|ts|mov)$/i.test(name)) return { time: fallbackTime, lens };
+  return null;
 }
+
+/** "2026/09/15 08:00:00" (the camera's file time in its XML list) -> ms, or null. */
+const cameraTime = (s) => {
+  const m = /(\d{4})[/-](\d{2})[/-](\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(s || '');
+  return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() : null;
+};
 
 /** Lists videos on the camera: [{ path, name, folder, size|null }] (newest first). */
 export async function listFiles(base, folders) {
@@ -48,7 +65,7 @@ export async function listFiles(base, folders) {
       const fpath = tag('FPATH');
       if (!fpath) continue;
       const p = '/' + fpath.replace(/^[A-Z]:\\?/i, '').replace(/\\/g, '/').replace(/^\/+/, '');
-      out.push({ path: p, name: tag('NAME') || p.split('/').pop(), folder: folderOf(p), size: Number(tag('SIZE')) || null });
+      out.push({ path: p, name: tag('NAME') || p.split('/').pop(), folder: folderOf(p), size: Number(tag('SIZE')) || null, camTime: cameraTime(tag('TIME')) });
     }
   } catch { /* fall back to folder listings */ }
   if (!out.length) {
@@ -56,7 +73,7 @@ export async function listFiles(base, folders) {
       if (!folders.includes(key)) continue;
       let html;
       try { html = await get(`${base}${dir}`); } catch { continue; }
-      for (const m of html.matchAll(/href="([^"?]+\.(?:mp4|ts))"/gi)) {
+      for (const m of html.matchAll(/href="([^"?]+\.(?:mp4|ts|mov))"/gi)) {
         const p = m[1].startsWith('/') ? m[1] : dir + m[1];
         if (folderOf(p) !== key) continue; // the Movie listing also links into subfolders
         out.push({ path: p, name: p.split('/').pop(), folder: key, size: null });
@@ -64,14 +81,14 @@ export async function listFiles(base, folders) {
     }
   }
   const seen = new Set();
-  return out
-    .filter((f) => /\.(mp4|ts)$/i.test(f.name) && folders.includes(f.folder) && !seen.has(f.path) && seen.add(f.path))
-    .map((f) => ({ ...f, info: parseName(f.name) }))
-    .filter((f) => f.info)
-    .sort((a, b) => b.info.time - a.info.time);
+  const videos = out.filter((f) => /\.(mp4|ts|mov)$/i.test(f.name) && folders.includes(f.folder) && !seen.has(f.path) && seen.add(f.path))
+    .map((f) => ({ ...f, info: parseName(f.name, f.camTime) }));
+  const known = videos.filter((f) => f.info).sort((a, b) => b.info.time - a.info.time);
+  known.unrecognized = videos.filter((f) => !f.info).map((f) => f.name);
+  return known;
 }
 
-async function download(url, dest, expected) {
+async function download(url, dest, expected, onProgress = () => {}) {
   const part = `${dest}.part`;
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   const have = fs.existsSync(part) ? fs.statSync(part).size : 0;
@@ -80,7 +97,12 @@ async function download(url, dest, expected) {
   const append = have > 0 && r.status === 206;
   const out = fs.createWriteStream(part, { flags: append ? 'a' : 'w' });
   try {
-    for await (const chunk of r.body) if (!out.write(chunk)) await new Promise((res) => out.once('drain', res));
+    let got = have;
+    for await (const chunk of r.body) {
+      got += chunk.length;
+      onProgress(got, have);
+      if (!out.write(chunk)) await new Promise((res) => out.once('drain', res));
+    }
   } finally {
     await new Promise((res) => out.end(res));
   }
@@ -141,6 +163,42 @@ function cameraFor(db, carId, lens) {
   return db.get('SELECT * FROM cameras WHERE id = ?', id);
 }
 
+/** Where a recording is stored in the library. */
+export function destFor(car, cam, time, name) {
+  return path.join(config.libraryDir, String(car.id), cam.id, new Date(time).toISOString().slice(0, 10), path.basename(name));
+}
+
+/** True if this car already has this recording (same name and size), from any import route. */
+export function alreadyImported(db, carId, name, size) {
+  return !!db.get('SELECT 1 FROM clips WHERE car_id = ? AND file_name = ? AND (? IS NULL OR size = ?)', carId, name, size ?? null, size ?? null);
+}
+
+/**
+ * Adds a recording that's already at its place in the library: reads its GPS, stores it as a clip of the car
+ * (event recordings locked, parking ones marked) and records where it came from. Shared by Wi-Fi and SD card import.
+ */
+export async function storeRecording(db, app, car, cam, { file, name, folder, info, cameraPath }) {
+  const size = fs.statSync(file).size;
+  const pts = await readGps(file);
+  const startedAt = pts.length ? pts[0].t : info.time;
+  const id = crypto.randomUUID();
+  const first = pts[0];
+  if (pts.length) fs.writeFileSync(file.replace(/\.(mp4|ts|mov)$/i, '.gpx'), gpxFor(pts));
+  db.run(`INSERT INTO clips(id, camera_id, car_id, stream, file_name, path, started_at, size, sha256, mode, locked, lock_reason, encrypted,
+      has_track, lat, lon, place, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+    id, cam.id, car.id, (LENSES[info.lens] || 'front').toLowerCase(), name, file, startedAt, size, await sha256File(file),
+    folder === 'parking' ? 'parking' : 'driving', folder === 'ro' ? 1 : 0, folder === 'ro' ? 'event' : null,
+    pts.length ? 1 : 0, first?.lat ?? null, first?.lon ?? null, first ? placeName(first.lat, first.lon) : null, now());
+  if (pts.length) insertPoints(db, car.id, cam.id, pts);
+  if (cameraPath) db.run('INSERT OR REPLACE INTO viofo_files(car_id, path, size, clip_id, imported_at) VALUES (?, ?, ?, ?, ?)', car.id, cameraPath, size, id, now());
+  db.run('UPDATE cameras SET last_seen_at = ? WHERE id = ?', now(), cam.id);
+  app.onClipAdded(id);
+  return id;
+}
+
+export { cameraFor, folderOfPath };
+const folderOfPath = (p) => (/(^|\/)RO\//i.test(p) ? 'ro' : /(^|\/)Parking\//i.test(p) ? 'parking' : 'movie');
+
 /** Checks one car's camera and imports what's new. Returns { imported, unreachable }. */
 export async function importCar(db, app, car, { maxFiles = Infinity } = {}) {
   const base = car.viofo_url.replace(/\/$/, '');
@@ -163,30 +221,29 @@ export async function importCar(db, app, car, { maxFiles = Infinity } = {}) {
       if (newest) skip.add(newest.path);
     }
   }
-  const todo = files.filter((f) => !skip.has(f.path) && !db.get('SELECT 1 FROM viofo_files WHERE car_id = ? AND path = ?', car.id, f.path));
+  const lenses = (car.viofo_lenses || 'F,R,I').split(',');
+  const todo = files.filter((f) => lenses.includes(f.info.lens) && !skip.has(f.path)
+    && !db.get('SELECT 1 FROM viofo_files WHERE car_id = ? AND path = ?', car.id, f.path) && !alreadyImported(db, car.id, f.name, f.size));
   let imported = 0;
   for (const f of todo) {
     if (imported >= maxFiles) break;
-    setStatus(db, car.id, { state: 'importing', message: `Importing ${f.name} (${imported + 1} of ${todo.length})`, imported });
     const cam = cameraFor(db, car.id, f.info.lens);
-    const day = new Date(f.info.time).toISOString().slice(0, 10);
-    const dest = path.join(config.libraryDir, String(car.id), cam.id, day, f.name.replace(/\.ts$/i, '.ts'));
+    const dest = destFor(car, cam, f.info.time, f.name);
     try {
-      const size = await download(`${base}${encodeURI(f.path)}`, dest, f.size);
-      const pts = await readGps(dest);
-      const startedAt = pts.length ? pts[0].t : f.info.time;
-      const id = crypto.randomUUID();
-      const first = pts[0];
-      if (pts.length) fs.writeFileSync(dest.replace(/\.(mp4|ts)$/i, '.gpx'), gpxFor(pts));
-      db.run(`INSERT INTO clips(id, camera_id, car_id, stream, file_name, path, started_at, size, sha256, mode, locked, lock_reason, encrypted,
-          has_track, lat, lon, place, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
-        id, cam.id, car.id, (LENSES[f.info.lens] || 'front').toLowerCase(), f.name, dest, startedAt, size, await sha256File(dest),
-        f.folder === 'parking' ? 'parking' : 'driving', f.folder === 'ro' ? 1 : 0, f.folder === 'ro' ? 'event' : null,
-        pts.length ? 1 : 0, first?.lat ?? null, first?.lon ?? null, first ? placeName(first.lat, first.lon) : null, now());
-      if (pts.length) insertPoints(db, car.id, cam.id, pts);
-      db.run('INSERT OR REPLACE INTO viofo_files(car_id, path, size, clip_id, imported_at) VALUES (?, ?, ?, ?, ?)', car.id, f.path, size, id, now());
-      db.run('UPDATE cameras SET last_seen_at = ? WHERE id = ?', now(), cam.id);
-      app.onClipAdded(id);
+      // Progress with transfer speed, so slow Wi-Fi is easy to spot.
+      const t0 = Date.now();
+      let lastUpdate = 0;
+      const progress = (got, resumedFrom) => {
+        if (Date.now() - lastUpdate < 2000) return;
+        lastUpdate = Date.now();
+        const mbps = (got - resumedFrom) / 1e6 / Math.max(0.5, (Date.now() - t0) / 1000);
+        const pct = f.size ? ` · ${Math.round((got / f.size) * 100)}%` : '';
+        const eta = f.size && mbps > 0 ? ` · about ${Math.max(1, Math.round((f.size - got) / 1e6 / mbps / 60))} min left` : '';
+        setStatus(db, car.id, { state: 'importing', message: `Importing ${f.name} (${imported + 1} of ${todo.length})${pct} · ${mbps.toFixed(1)} MB/s${eta}`, imported, mbps });
+      };
+      setStatus(db, car.id, { state: 'importing', message: `Importing ${f.name} (${imported + 1} of ${todo.length})`, imported });
+      await download(`${base}${encodeURI(f.path)}`, dest, f.size, progress);
+      await storeRecording(db, app, car, cam, { file: dest, name: f.name, folder: f.folder, info: f.info, cameraPath: f.path });
       imported++;
     } catch (e) {
       // Usually the car drove away mid-download: the partial file is kept and resumed next time.
@@ -194,7 +251,15 @@ export async function importCar(db, app, car, { maxFiles = Infinity } = {}) {
       return { imported, unreachable: false };
     }
   }
-  setStatus(db, car.id, { state: 'idle', message: imported ? `Imported ${imported} recordings.` : 'Up to date.', imported, files: files.length });
+  let message = imported ? `Imported ${imported} recordings.` : 'Up to date.';
+  if (!files.length && files.unrecognized?.length) {
+    message = `Found ${files.unrecognized.length} videos, but couldn’t read their date from the names (e.g. ${files.unrecognized[0]}). Please report this model.`;
+  } else if (!files.length) {
+    message = 'Connected, but no recordings were found in the selected folders.';
+  } else if (!imported && todo.length === 0 && skip.size >= files.length) {
+    message = 'Connected. The newest recording is waiting until the camera starts the next one (it may still be recording).';
+  }
+  setStatus(db, car.id, { state: 'idle', message, imported, files: files.length });
   return { imported, unreachable: false };
 }
 
