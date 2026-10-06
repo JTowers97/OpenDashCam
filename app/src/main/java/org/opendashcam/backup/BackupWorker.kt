@@ -80,7 +80,9 @@ class BackupWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     return Result.success()
                 }
                 val metered = isMetered(ctx)
-                if (metered && !settings.backupCellular) {
+                // On mobile data with Wi-Fi-only backups, locked and impact clips may still go (if that option is on).
+                val eventsOnly = metered && !settings.backupCellular
+                if (eventsOnly && !settings.backupEventsOnMobile) {
                     BackupStatus.update { copy(message = "Waiting for Wi-Fi.") }
                     return Result.retry()
                 }
@@ -91,9 +93,14 @@ class BackupWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 
                 // Next clip that still needs a destination that's working this run.
                 val clip = queue.firstOrNull { c ->
-                    c.file.absolutePath !in attempted && c.file.exists() &&
+                    c.file.absolutePath !in attempted && c.file.exists() && (!eventsOnly || c.locked) &&
                         ((smbOn && smbError == null && !BackupState.isBackedUp(c.file, settings.smbConfig.targetId)) ||
                             (server != null && serverError == null && !BackupState.isOnServer(c.file, settings.serverKey)))
+                } ?: run {
+                    if (eventsOnly && queue.any { !it.locked && it.file.exists() }) {
+                        BackupStatus.update { copy(message = "Locked and impact clips are uploaded. Other clips wait for Wi-Fi.") }
+                    }
+                    null
                 } ?: break
                 attempted += clip.file.absolutePath
 
@@ -206,6 +213,8 @@ class BackupWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             .put("locked", clip.locked)
             .put("lockReason", if (clip.impact) "impact" else if (clip.locked) "user" else JSONObject.NULL)
             .put("encrypted", clip.encrypted)
+            // Whether the date/time stamp is burned in, so the server skips that corner when reading or blurring plates.
+            .put("stamp", settings.overlayEnabled)
         val clipId = server.uploadClip(
             file = clip.file,
             meta = meta,

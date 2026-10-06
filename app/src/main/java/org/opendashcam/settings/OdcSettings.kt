@@ -67,6 +67,25 @@ class OdcSettings(context: Context) {
     var segmentMinutes by int("segment_minutes", 3)
     var displayMode by enumPref("display_mode", DisplayMode.DIM, DisplayMode.entries)
     var audioEnabled by bool("audio_enabled", false)
+    /** Upload locked and impact clips over mobile data even when other backups wait for Wi-Fi. */
+    var backupEventsOnMobile by bool("backup_events_mobile", false)
+    /** Short spoken announcements (recording started, parking mode, impact…). */
+    var spokenFeedback by bool("spoken_feedback", false)
+
+    // Command Center: this phone signed in to an ODC Server account
+    var ccEnabled by bool("cc_enabled", false)
+    var ccDefault by bool("cc_default", false)          // open the app in Command Center
+    var ccUrl by string("cc_url", "")
+    var ccToken: String?
+        get() = secrets.get("cc_token")
+        set(value) = secrets.put("cc_token", value)
+    var ccPin by string("cc_pin", "")
+    var ccUsername by string("cc_username", "")
+    var ccIsAdmin by bool("cc_is_admin", false)
+    var ccDelivery by string("cc_delivery", "direct")   // unifiedpush | direct | off
+    var ccLastShownId by long("cc_last_shown", 0L)       // newest alert already shown (avoids doubles from two routes)
+    val ccSignedIn get() = ccUrl.isNotBlank() && !ccToken.isNullOrBlank()
+
     // Appearance and accessibility
     var themeMode by string("theme_mode", "dark")          // dark | light | system
     var accent by string("accent", "orange")               // orange | blue | green | purple | teal | red | dynamic
@@ -283,6 +302,13 @@ class OdcSettings(context: Context) {
         override fun getValue(thisRef: Any?, property: KProperty<*>) = prefs.getString(key, def) ?: def
         override fun setValue(thisRef: Any?, property: KProperty<*>, value: String) {
             prefs.edit().putString(key, value).apply()
+        }
+    }
+
+    private fun long(key: String, def: Long) = object : ReadWriteProperty<Any?, Long> {
+        override fun getValue(thisRef: Any?, property: KProperty<*>) = prefs.getLong(key, def)
+        override fun setValue(thisRef: Any?, property: KProperty<*>, value: Long) {
+            prefs.edit().putLong(key, value).apply()
         }
     }
 

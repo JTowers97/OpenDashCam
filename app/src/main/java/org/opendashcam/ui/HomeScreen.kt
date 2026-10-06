@@ -75,6 +75,7 @@ fun HomeScreen(
     onOpenSettings: () -> Unit,
     onOpenClips: () -> Unit,
     onOpenParking: () -> Unit = {},
+    onOpenCommandCenter: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -210,6 +211,9 @@ fun HomeScreen(
                 }
                 if (!active && parkingSpot(settings) != null) {
                     TextButton(onClick = onOpenParking) { Text("Where I parked") }
+                }
+                if (settings.ccEnabled && settings.ccSignedIn) {
+                    TextButton(onClick = onOpenCommandCenter) { Text("Command Center") }
                 }
 
                 val watched by org.opendashcam.liveview.LiveViewClient.watching.collectAsStateWithLifecycle()

@@ -276,7 +276,7 @@ fun ClipsScreen(
                             selected.clear()
                             selected.addAll(shown.filter { it.file.absolutePath !in state.activeFiles }.map { it.file.absolutePath })
                         }) { Text("Select all") }
-                        TextButton(enabled = picked.isNotEmpty(), onClick = { picked.filter { !it.locked }.forEach { storage.lock(it) }; selected.clear(); refresh() }) { Text("Lock") }
+                        TextButton(enabled = picked.isNotEmpty(), onClick = { picked.filter { !it.locked }.forEach { storage.lock(it) }; BackupScheduler.kickEvents(context); selected.clear(); refresh() }) { Text("Lock") }
                         TextButton(enabled = picked.isNotEmpty(), onClick = { picked.filter { it.locked }.forEach { storage.unlock(it) }; selected.clear(); refresh() }) { Text("Unlock") }
                         if (settings.smbEnabled || settings.serverPaired) {
                             TextButton(enabled = picked.isNotEmpty(), onClick = { picked.forEach { storage.setKeep(it, true) }; selected.clear(); refresh() }) { Text("Keep on phone") }
@@ -313,7 +313,7 @@ fun ClipsScreen(
                         showBackup = settings.smbEnabled || settings.serverPaired,
                         onPlay = { play(clip) },
                         onToggleLock = {
-                            if (clip.locked) storage.unlock(clip) else storage.lock(clip)
+                            if (clip.locked) storage.unlock(clip) else { storage.lock(clip); BackupScheduler.kickEvents(context) }
                             refresh()
                         },
                         onToggleKeep = {

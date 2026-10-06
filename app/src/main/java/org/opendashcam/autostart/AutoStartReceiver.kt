@@ -31,6 +31,8 @@ class AutoStartReceiver : BroadcastReceiver() {
             }
             Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED -> {
                 if (settings.autoStartCharging) StandbyService.start(context)
+                // Command Center alerts over the direct connection resume after a restart.
+                if (settings.ccSignedIn && settings.ccDelivery == "direct") org.opendashcam.command.AlertConnectionService.start(context)
                 // Tracking-only mode resumes by itself only with "Allow all the time" location access.
                 if (settings.trackingAfterRestart && TrackingService.hasBackgroundPermission(context)) TrackingService.start(context)
             }

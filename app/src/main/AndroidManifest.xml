@@ -88,6 +88,22 @@
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_recording_info" />
         </receiver>
 
+        <!-- Command Center: alerts over the direct connection, or through UnifiedPush -->
+        <service
+            android:name=".command.AlertConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps a connection to the user's own self-hosted ODC Server to receive dashcam alerts (impacts, arrivals) without Google services" />
+        </service>
+        <service
+            android:name=".command.PushServiceImpl"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".autostart.AutoStartReceiver"
             android:exported="true">

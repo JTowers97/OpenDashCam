@@ -69,7 +69,8 @@ object AppLock {
     }
 }
 
-val PROTECTED_SCREENS = setOf(Screen.SETTINGS, Screen.CLIPS, Screen.PRIVACY_ZONES, Screen.SERVER_CLIPS, Screen.SERVER_MAP, Screen.SERVER_SYNC, Screen.PARKING)
+val PROTECTED_SCREENS = setOf(Screen.SETTINGS, Screen.CLIPS, Screen.PRIVACY_ZONES, Screen.SERVER_CLIPS, Screen.SERVER_MAP, Screen.SERVER_SYNC, Screen.PARKING,
+    Screen.CC_HOME, Screen.CC_ALERT, Screen.CC_PLAYER, Screen.CC_SETTINGS)
 
 /** Shown instead of a protected screen while the app is locked. Asks right away; the button asks again. */
 @Composable

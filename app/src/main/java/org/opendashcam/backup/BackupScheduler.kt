@@ -50,6 +50,21 @@ object BackupScheduler {
         )
     }
 
+    /**
+     * Impact and locked clips over mobile data: runs on any connection (the worker then uploads only locked clips
+     * while on mobile data). Used right after an impact, and again once the clip that was recording has finished.
+     */
+    fun kickEvents(context: Context, delaySeconds: Long = 0) {
+        val settings = OdcSettings(context)
+        if (!settings.backupEventsOnMobile || (!BackupQueue.smbOn(settings) && !BackupQueue.serverOn(settings))) return
+        val request = OneTimeWorkRequestBuilder<BackupWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setInitialDelay(delaySeconds, TimeUnit.SECONDS)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork("$UNIQUE-events-$delaySeconds", ExistingWorkPolicy.REPLACE, request)
+    }
+
     /** Continues after a run hit its time limit with clips still waiting. */
     fun continueLater(context: Context) {
         val settings = OdcSettings(context)

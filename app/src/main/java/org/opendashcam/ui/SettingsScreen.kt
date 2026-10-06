@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -79,6 +80,7 @@ fun SettingsScreen(
     onRerunSetup: () -> Unit,
     onOpenPrivacyZones: () -> Unit,
     onOpenServerClips: () -> Unit,
+    onOpenCommandCenter: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -256,6 +258,16 @@ fun SettingsScreen(
         )
 
         // ------------------------------------------------------------ Parking
+        SwitchRow(
+            title = "Spoken feedback",
+            checked = settings.spokenFeedback,
+            onChange = { on ->
+                set { settings.spokenFeedback = on }
+                if (on) org.opendashcam.feedback.Announcer.say(context, "Spoken feedback on")
+            },
+            subtitle = "Short announcements like \"Recording started\", \"Parking mode\" or \"Impact detected\", so you know ODC is working without looking at the phone. Plays through the car's speakers when connected, lowering music briefly.",
+        )
+
         SectionHeader("Parking mode")
         SwitchRow(
             title = "Parking mode when unplugged",
@@ -462,6 +474,11 @@ fun SettingsScreen(
         )
 
         // ------------------------------------------------------------ ODC Server
+        SectionHeader("Command Center")
+        Hint(if (settings.ccSignedIn) "Signed in to ${settings.ccUrl} as ${settings.ccUsername}. Manage your server and get its alerts from this phone."
+            else "Use this phone to manage your ODC Server and get its alerts, such as impacts with their photo, from any of your cars. Signs in with your ODC Server account.")
+        Button(onClick = onOpenCommandCenter) { Text(if (settings.ccSignedIn) "Open Command Center" else "Set up Command Center") }
+
         SectionHeader("ODC Server")
         ServerSection(settings, onChanged = { version++ }, onOpenServerClips = onOpenServerClips)
 
@@ -542,7 +559,15 @@ fun SettingsScreen(
                 onChange = { on -> set { settings.backupCellular = on }; BackupScheduler.kick(context, replace = true) },
                 subtitle = "Off: uploads wait for Wi-Fi. A server or share at home is usually only reachable from elsewhere over HTTPS or a VPN (e.g. WireGuard or Tailscale).",
             )
-            if (settings.backupCellular) {
+            if (!settings.backupCellular) {
+                SwitchRow(
+                    title = "Upload impact and locked clips over cellular",
+                    checked = settings.backupEventsOnMobile,
+                    onChange = { on -> set { settings.backupEventsOnMobile = on }; BackupScheduler.kick(context, replace = true) },
+                    subtitle = "So the clips that matter reach your backup right away, even away from Wi-Fi. Everything else still waits for Wi-Fi.",
+                )
+            }
+            if (settings.backupCellular || settings.backupEventsOnMobile) {
                 ChoiceRow(
                     title = "Monthly cellular limit",
                     options = listOf(500, 1024, 2048, 5120, 10240, 0),

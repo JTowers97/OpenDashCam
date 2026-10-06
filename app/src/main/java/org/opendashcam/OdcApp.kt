@@ -10,6 +10,7 @@ class OdcApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Notifier.createChannels(this)
+        org.opendashcam.command.AlertNotifier.createChannels(this)
         org.maplibre.android.MapLibre.getInstance(this)
         // Decrypted playback copies never outlive the app session.
         ClipCrypto.clearPlaybackCache(this)

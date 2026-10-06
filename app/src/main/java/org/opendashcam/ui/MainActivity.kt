@@ -28,13 +28,15 @@ import org.opendashcam.recording.RecordingService
 import org.opendashcam.settings.OdcSettings
 import org.opendashcam.tracking.TrackingService
 
-enum class Screen { ONBOARDING, HOME, SETTINGS, CLIPS, PRIVACY_ZONES, SERVER_CLIPS, SERVER_MAP, SERVER_SYNC, PARKING }
+enum class Screen { ONBOARDING, HOME, SETTINGS, CLIPS, PRIVACY_ZONES, SERVER_CLIPS, SERVER_MAP, SERVER_SYNC, PARKING, CC_HOME, CC_SIGNIN, CC_ALERT, CC_PLAYER, CC_SETTINGS }
 
 class MainActivity : FragmentActivity() {
     private lateinit var settings: OdcSettings
 
     /** Incremented each time an auto-start (charging / Bluetooth) opens this screen. */
     private var autoStartRequests by mutableIntStateOf(0)
+    /** An alert to open (event id, notification id), from tapping a Command Center notification. */
+    private var openAlert by mutableStateOf<Pair<Long, Long>?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,7 +45,7 @@ class MainActivity : FragmentActivity() {
         Appearance.load(settings)
         handleIntent(intent, fresh = savedInstanceState == null)
         setContent {
-            OdcTheme { OdcRoot(settings, autoStartRequests) }
+            OdcTheme { OdcRoot(settings, autoStartRequests, openAlert) { openAlert = null } }
         }
     }
 
@@ -66,6 +68,8 @@ class MainActivity : FragmentActivity() {
     override fun onResume() {
         super.onResume()
         if (settings.onboardingDone && settings.smbEnabled) BackupScheduler.kick(this)
+        // Command Center alerts over the direct connection: make sure it's running.
+        if (settings.ccSignedIn && settings.ccDelivery == "direct") org.opendashcam.command.AlertConnectionService.start(this)
         // Tracking-only mode: make sure it's running (e.g. after the app was updated or Android stopped it).
         if (settings.onboardingDone && TrackingService.canRun(this, settings) && !TrackingService.state.value.active) TrackingService.start(this)
         // Re-arm charging auto-start whenever ODC is opened (Android allows it while on screen).
@@ -75,6 +79,11 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun handleIntent(intent: Intent?, fresh: Boolean) {
+        if (intent != null && intent.hasExtra(org.opendashcam.command.AlertNotifier.EXTRA_NOTIFICATION_ID)) {
+            openAlert = intent.getLongExtra(org.opendashcam.command.AlertNotifier.EXTRA_EVENT_ID, 0L) to
+                intent.getLongExtra(org.opendashcam.command.AlertNotifier.EXTRA_NOTIFICATION_ID, 0L)
+            intent.removeExtra(org.opendashcam.command.AlertNotifier.EXTRA_NOTIFICATION_ID)
+        }
         if (fresh && intent?.getStringExtra(AutoStart.EXTRA_AUTO_START) != null && settings.onboardingDone) {
             intent.removeExtra(AutoStart.EXTRA_AUTO_START)
             autoStartRequests++
@@ -83,9 +92,23 @@ class MainActivity : FragmentActivity() {
 }
 
 @Composable
-fun OdcRoot(settings: OdcSettings, autoStartRequests: Int) {
+fun OdcRoot(settings: OdcSettings, autoStartRequests: Int, openAlert: Pair<Long, Long>? = null, onAlertOpened: () -> Unit = {}) {
     var screen by rememberSaveable {
-        mutableStateOf(if (settings.onboardingDone) Screen.HOME else Screen.ONBOARDING)
+        mutableStateOf(
+            when {
+                !settings.onboardingDone -> Screen.ONBOARDING
+                settings.ccEnabled && settings.ccSignedIn && settings.ccDefault -> Screen.CC_HOME
+                else -> Screen.HOME
+            }
+        )
+    }
+    var ccEventId by rememberSaveable { mutableStateOf(0L) }
+    var ccNotificationId by rememberSaveable { mutableStateOf(0L) }
+    var ccPlay by rememberSaveable { mutableStateOf(Triple("", 0L, "")) }
+    LaunchedEffect(openAlert) {
+        val a = openAlert ?: return@LaunchedEffect
+        if (settings.ccSignedIn) { ccEventId = a.first; ccNotificationId = a.second; screen = Screen.CC_ALERT }
+        onAlertOpened()
     }
     var serverClipsBack by rememberSaveable { mutableStateOf(Screen.CLIPS) }
     var syncBack by rememberSaveable { mutableStateOf(Screen.SERVER_CLIPS) }
@@ -102,8 +125,11 @@ fun OdcRoot(settings: OdcSettings, autoStartRequests: Int) {
     LaunchedEffect(autoStartRequests) {
         if (autoStartRequests > 0 && screen != Screen.ONBOARDING) screen = Screen.HOME
     }
-    BackHandler(enabled = screen != Screen.HOME && screen != Screen.ONBOARDING) {
+    BackHandler(enabled = screen != Screen.HOME && screen != Screen.ONBOARDING && !(screen == Screen.CC_HOME && settings.ccDefault)) {
         screen = when (screen) {
+            Screen.CC_ALERT, Screen.CC_SETTINGS -> Screen.CC_HOME
+            Screen.CC_PLAYER -> Screen.CC_ALERT
+            Screen.CC_SIGNIN -> Screen.SETTINGS
             Screen.PRIVACY_ZONES -> Screen.SETTINGS
             Screen.SERVER_CLIPS -> serverClipsBack
             Screen.SERVER_MAP -> Screen.CLIPS
@@ -131,13 +157,30 @@ fun OdcRoot(settings: OdcSettings, autoStartRequests: Int) {
                         onOpenSettings = { screen = Screen.SETTINGS },
                         onOpenClips = { screen = Screen.CLIPS },
                         onOpenParking = { screen = Screen.PARKING },
+                        onOpenCommandCenter = { screen = if (settings.ccSignedIn) Screen.CC_HOME else Screen.CC_SIGNIN },
                     )
                 }
             }
             Screen.PARKING -> ParkingScreen(settings, onBack = { screen = Screen.HOME }, modifier = Modifier.safeDrawingPadding())
+            Screen.CC_SIGNIN -> CcSignInScreen(settings, onDone = { screen = Screen.CC_HOME }, onBack = { screen = Screen.SETTINGS }, modifier = Modifier.safeDrawingPadding())
+            Screen.CC_HOME -> CcHomeScreen(
+                settings,
+                onOpenAlert = { e, n -> ccEventId = e; ccNotificationId = n; screen = Screen.CC_ALERT },
+                onDashcamMode = { screen = Screen.HOME },
+                onSettings = { screen = Screen.CC_SETTINGS },
+                modifier = Modifier.safeDrawingPadding(),
+            )
+            Screen.CC_ALERT -> CcAlertScreen(
+                settings, ccEventId, ccNotificationId, onBack = { screen = Screen.CC_HOME },
+                onPlay = { url, offset, title -> ccPlay = Triple(url, offset, title); screen = Screen.CC_PLAYER },
+                modifier = Modifier.safeDrawingPadding(),
+            )
+            Screen.CC_PLAYER -> CcPlayerScreen(ccPlay.first, ccPlay.second, ccPlay.third, onBack = { screen = Screen.CC_ALERT }, modifier = Modifier.safeDrawingPadding())
+            Screen.CC_SETTINGS -> CcSettingsScreen(settings, onBack = { screen = Screen.CC_HOME }, onSignedOut = { screen = Screen.HOME }, modifier = Modifier.safeDrawingPadding())
             Screen.SETTINGS -> SettingsScreen(
                 settings,
                 onBack = { screen = Screen.HOME },
+                onOpenCommandCenter = { screen = if (settings.ccSignedIn) Screen.CC_HOME else Screen.CC_SIGNIN },
                 onRerunSetup = {
                     settings.onboardingDone = false
                     screen = Screen.ONBOARDING

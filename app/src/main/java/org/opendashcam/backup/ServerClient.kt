@@ -7,7 +7,7 @@ import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
 
-class ServerException(val status: Int, message: String) : Exception(message)
+class ServerException(val status: Int, message: String, val totpRequired: Boolean = false) : Exception(message)
 
 /**
  * Talks to the ODC Server's phone API (/api/v1). Plain HttpURLConnection, no extra libraries.
@@ -140,6 +140,54 @@ class ServerClient(baseUrl: String, private val token: String?, private val pin:
                 return serverOffset ?: throw ServerException(code, "Server didn't report the upload offset")
             }
             throw ServerException(code, errorMessage(c))
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    // ---------------------------------------------------------------- Command Center (signed-in account API)
+
+    /** Any request to the server's API, signed in with this client's key. */
+    fun call(method: String, path: String, body: JSONObject? = null): JSONObject = json(method, path, body)
+
+    /** A request whose answer is a list (e.g. /api/cars). */
+    fun callArray(method: String, path: String): org.json.JSONArray {
+        val c = open(method, path)
+        return org.json.JSONArray(readResponse(c).ifBlank { "[]" })
+    }
+
+    /** Raw bytes (e.g. an alert photo), signed in. Absolute URLs on other hosts are fetched as-is (signed links). */
+    fun bytes(pathOrUrl: String): ByteArray {
+        val c = if (pathOrUrl.startsWith("http")) (URL(pathOrUrl).openConnection() as HttpURLConnection).also {
+            it.connectTimeout = 15_000; it.readTimeout = 30_000
+            ServerConnection.applyPin(it, pin)
+            if (pathOrUrl.startsWith(base)) token?.let { t -> it.setRequestProperty("Authorization", "Bearer $t") }
+        } else open("GET", pathOrUrl)
+        try {
+            if (c.responseCode !in 200..299) throw ServerException(c.responseCode, errorMessage(c))
+            return c.inputStream.use { it.readBytes() }
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    /** Signs in to an account (Command Center). Throws ServerException(totpRequired = true) when a 2FA code is needed. */
+    fun signIn(username: String, password: String, code: String?, deviceName: String): JSONObject {
+        val body = JSONObject().put("username", username).put("password", password).put("app", true).put("deviceName", deviceName)
+        if (!code.isNullOrBlank()) body.put("code", code.trim())
+        val c = open("POST", "/api/login")
+        val bytes = body.toString().toByteArray()
+        c.setRequestProperty("Content-Type", "application/json")
+        c.doOutput = true
+        c.setFixedLengthStreamingMode(bytes.size)
+        c.outputStream.use { it.write(bytes) }
+        try {
+            if (c.responseCode !in 200..299) {
+                val text = try { c.errorStream?.bufferedReader()?.use { it.readText() } } catch (_: Exception) { null }
+                val j = try { JSONObject(text ?: "{}") } catch (_: Exception) { JSONObject() }
+                throw ServerException(c.responseCode, j.optString("error").ifBlank { "Server responded ${c.responseCode}" }, j.optBoolean("totpRequired"))
+            }
+            return JSONObject(c.inputStream.bufferedReader().use { it.readText() })
         } finally {
             c.disconnect()
         }

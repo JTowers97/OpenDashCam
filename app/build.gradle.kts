@@ -17,7 +17,7 @@ android {
         val ciBuild = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
         val commit = System.getenv("GITHUB_SHA")?.take(7) ?: "local"
         versionCode = 1000 + (ciBuild ?: 0)
-        versionName = "1.6.0"
+        versionName = "1.8.1"
         buildConfigField("String", "BUILD_LABEL", "\"${ciBuild?.let { "build $it" } ?: "local build"} · $commit\"")
     }
 
@@ -82,7 +82,7 @@ android {
 
 base {
     // APK file name includes the version: OpenDashCam-0.4.0-debug.apk
-    archivesName.set("OpenDashCam-1.6.0")
+    archivesName.set("OpenDashCam-1.8.1")
 }
 
 dependencies {
@@ -106,6 +106,9 @@ dependencies {
 
     // Background uploads
     implementation("androidx.work:work-runtime-ktx:2.10.0")
+
+    // Command Center alerts without Google services: UnifiedPush (through a distributor app such as ntfy)
+    implementation("org.unifiedpush.android:connector:3.0.9")
 
     // Optional app lock (fingerprint, face or screen lock)
     implementation("androidx.biometric:biometric:1.1.0")

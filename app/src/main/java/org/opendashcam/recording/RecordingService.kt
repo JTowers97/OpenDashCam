@@ -552,6 +552,12 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
             lastFinished.remove(label)?.let { storage.lockFile(it, impact = true) }
         }
         update { copy(impacts = impacts + 1) }
+        org.opendashcam.feedback.Announcer.say(this, "Impact detected. Clips locked")
+        // Impact clips over mobile data (optional): the clip just finished now, the one recording and the next once done.
+        val segSec = (recorders.first().profile.segmentMs / 1000L).coerceAtLeast(15)
+        org.opendashcam.backup.BackupScheduler.kickEvents(this, 0)
+        org.opendashcam.backup.BackupScheduler.kickEvents(this, segSec + 20)
+        org.opendashcam.backup.BackupScheduler.kickEvents(this, 2 * segSec + 20)
         val message = String.format(Locale.US, "%.1f g jolt; clips locked", g)
         if (settings.serverPaired) {
             // Impact snapshot: the next frame from the main (road-facing) camera, sent with the alert. Gives up after 3 s.
@@ -721,11 +727,26 @@ class RecordingService : Service(), CameraStreamRecorder.Listener {
     private fun hasPermission(p: String) =
         ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
 
+    /** Spoken feedback (optional): what changed, in a few words. */
+    private fun announce(old: State, new: State) {
+        val say = { text: String -> org.opendashcam.feedback.Announcer.say(this, text) }
+        when {
+            new.status == Status.RECORDING && old.status != Status.RECORDING ->
+                say(if (new.mode == Mode.PARKING) "Recording in parking mode" else "Recording started")
+            new.status == Status.RECORDING && old.mode != new.mode ->
+                say(if (new.mode == Mode.PARKING) "Parking mode" else "Driving mode")
+            new.status == Status.PAUSED_BATTERY && old.status != Status.PAUSED_BATTERY -> say("Battery low. Recording paused")
+            new.status == Status.PAUSED_THERMAL && old.status != Status.PAUSED_THERMAL -> say("Phone too hot. Recording paused")
+            old.active && !new.active && new.status == Status.IDLE -> say("Recording stopped")
+        }
+    }
+
     private fun update(transform: State.() -> State) {
         val old = _state.value
         val new = old.transform()
         _state.value = new
         if (old.active != new.active || old.mode != new.mode) org.opendashcam.widget.RecordingWidget.update(this)
+        announce(old, new)
         if (running && (old.status != new.status || old.mode != new.mode || old.streams != new.streams || old.message != new.message)) {
             val title = when (new.status) {
                 Status.RECORDING -> "Recording · ${new.mode.label}"
