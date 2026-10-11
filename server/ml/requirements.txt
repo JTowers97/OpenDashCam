@@ -1,5 +1,5 @@
-sentence-transformers>=3.0,<6
-pillow>=10
-numpy>=1.26
-fast-alpr[onnx]>=0.2
-opencv-python-headless>=4.8
+sentence-transformers>=6.1.0,<7
+pillow>=12.3.0
+numpy>=2.5.3
+fast-alpr[onnx]>=0.4.0
+opencv-python-headless>=5.0.0.93
