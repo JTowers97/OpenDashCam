@@ -27,8 +27,8 @@ jobs:
           - language: java-kotlin
             build-mode: manual
     steps:
-      - uses: actions/checkout@v5
-      - uses: github/codeql-action/init@v3
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -40,11 +40,11 @@ jobs:
       - if: matrix.language == 'java-kotlin'
         uses: android-actions/setup-android@v4
       - if: matrix.language == 'java-kotlin'
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.11.1'
       - if: matrix.language == 'java-kotlin'
         run: gradle assembleDebug --no-daemon
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
