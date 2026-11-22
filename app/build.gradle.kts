@@ -96,28 +96,28 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     // Maps (privacy zone editor, clip map): MapLibre with OpenStreetMap data, no API key, BSD-2
-    implementation("org.maplibre.gl:android-sdk:11.11.0")
+    implementation("org.maplibre.gl:android-sdk:13.7.1")
 
     // QR scanning for server pairing (ZXing, Apache 2.0, no Google Play Services)
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     // Background uploads
-    implementation("androidx.work:work-runtime-ktx:2.10.0")
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
 
     // Command Center alerts without Google services: UnifiedPush (through a distributor app such as ntfy)
-    implementation("org.unifiedpush.android:connector:3.0.9")
+    implementation("org.unifiedpush.android:connector:3.3.6")
 
     // Optional app lock (fingerprint, face or screen lock)
     implementation("androidx.biometric:biometric:1.1.0")
     // SMB 2/3 client (Apache 2.0)
-    implementation("com.hierynomus:smbj:0.14.0")
+    implementation("com.hierynomus:smbj:0.15.0")
 
     // CameraX is used only for the framing preview while idle.
     // Recording uses Camera2 + MediaRecorder directly.
-    val cameraX = "1.4.2"
+    val cameraX = "1.7.0"
     implementation("androidx.camera:camera-camera2:$cameraX")
     implementation("androidx.camera:camera-lifecycle:$cameraX")
     implementation("androidx.camera:camera-view:$cameraX")
